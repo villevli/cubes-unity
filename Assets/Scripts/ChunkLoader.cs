@@ -356,19 +356,6 @@ namespace Cubes
                         if (block == BlockType.Air)
                             continue;
 
-                        // Skip side if neighbor block is solid (non see-through)
-                        static bool IsNeighborSolid(in ReadOnlySpan<byte> blocks, int x, int y, int z)
-                        {
-                            // TODO: Check neighboring chunk if at the edge
-                            if (y < 0 || y >= size)
-                                return false;
-                            if (z < 0 || z >= size)
-                                return false;
-                            if (x < 0 || x >= size)
-                                return false;
-                            return GetBlock(blocks, x, y, z) != BlockType.Air;
-                        }
-
                         static void AddIndices(ref NativeArray<ushort> indices, ref int count, int vi)
                         {
                             indices[count++] = (ushort)(vi + 0);
@@ -400,8 +387,16 @@ namespace Cubes
                         sbyte4 west = new(-128, 0, 0);
                         sbyte4 east = new(127, 0, 0);
 
+                        // Skip side if neighbor block is solid (non see-through)
+                        static bool IsNeighborSolid(in ReadOnlySpan<byte> blocks, int x, int y, int z)
+                        {
+                            return GetBlock(blocks, x, y, z) != BlockType.Air;
+                        }
+
+                        // TODO: Check neighboring chunk if at the edge
+
                         // down y-
-                        if (!IsNeighborSolid(blocks, x, y - 1, z))
+                        if (y <= 0 || !IsNeighborSolid(blocks, x, y - 1, z))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, down);
@@ -410,7 +405,7 @@ namespace Cubes
                             AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, down);
                         }
                         // up y+
-                        if (!IsNeighborSolid(blocks, x, y + 1, z))
+                        if (y >= size - 1 || !IsNeighborSolid(blocks, x, y + 1, z))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, up);
@@ -419,7 +414,7 @@ namespace Cubes
                             AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, up);
                         }
                         // south z-
-                        if (!IsNeighborSolid(blocks, x, y, z - 1))
+                        if (z <= 0 || !IsNeighborSolid(blocks, x, y, z - 1))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, south);
@@ -428,7 +423,7 @@ namespace Cubes
                             AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, south);
                         }
                         // north z+
-                        if (!IsNeighborSolid(blocks, x, y, z + 1))
+                        if (z >= size - 1 || !IsNeighborSolid(blocks, x, y, z + 1))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, north);
@@ -437,7 +432,7 @@ namespace Cubes
                             AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, north);
                         }
                         // west x-
-                        if (!IsNeighborSolid(blocks, x - 1, y, z))
+                        if (x <= 0 || !IsNeighborSolid(blocks, x - 1, y, z))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, west);
@@ -446,7 +441,7 @@ namespace Cubes
                             AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, west);
                         }
                         // east x+
-                        if (!IsNeighborSolid(blocks, x + 1, y, z))
+                        if (x >= size - 1 || !IsNeighborSolid(blocks, x + 1, y, z))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, east);
