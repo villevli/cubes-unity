@@ -218,6 +218,7 @@ namespace Cubes
                 if (go is not null)
                 {
                     go.transform.position = (float3)(chunk.chunk.Position * Chunk.Size);
+                    go.transform.localScale = (float3)(Chunk.Size * 255 / 128f);
                 }
             }
             using (new TimerScope("filter", timers))
@@ -291,8 +292,28 @@ namespace Cubes
 
         private struct Vertex
         {
-            public float3 pos;
-            public float3 normal;
+            public byte4 position;
+            public sbyte4 normal;
+        }
+
+        private struct byte4
+        {
+            public byte x, y, z, w;
+
+            public byte4(byte x, byte y, byte z, byte w = 0)
+            {
+                this.x = x; this.y = y; this.z = z; this.w = w;
+            }
+        }
+
+        private struct sbyte4
+        {
+            public sbyte x, y, z, w;
+
+            public sbyte4(sbyte x, sbyte y, sbyte z, sbyte w = 0)
+            {
+                this.x = x; this.y = y; this.z = z; this.w = w;
+            }
         }
 
         public CreateMesh(Allocator allocator)
@@ -358,27 +379,35 @@ namespace Cubes
                             indices[count++] = (ushort)(vi + 0);
                         }
 
-                        static void AddVertex(ref NativeArray<Vertex> verts, ref int count, float x, float y, float z, in float3 normal)
+                        static void AddVertex(ref NativeArray<Vertex> verts, ref int count, int x, int y, int z, in sbyte4 normal)
                         {
                             verts[count++] = new()
                             {
-                                pos = new(x, y, z),
+                                position = new(
+                                    (byte)(x * (128 / size)),
+                                    (byte)(y * (128 / size)),
+                                    (byte)(z * (128 / size))
+                                // TODO: pack the normal in the w byte, use custom shader
+                                ),
                                 normal = normal
                             };
                         }
 
-                        float3 up = new(0, 1, 0);
-                        float3 north = new(0, 0, 1);
-                        float3 east = new(1, 0, 0);
+                        sbyte4 down = new(0, -128, 0);
+                        sbyte4 up = new(0, 127, 0);
+                        sbyte4 south = new(0, 0, -128);
+                        sbyte4 north = new(0, 0, 127);
+                        sbyte4 west = new(-128, 0, 0);
+                        sbyte4 east = new(127, 0, 0);
 
                         // down y-
                         if (!IsNeighborSolid(blocks, x, y - 1, z))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, -up);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, -up);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, -up);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, -up);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, down);
+                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, down);
+                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, down);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, down);
                         }
                         // up y+
                         if (!IsNeighborSolid(blocks, x, y + 1, z))
@@ -393,10 +422,10 @@ namespace Cubes
                         if (!IsNeighborSolid(blocks, x, y, z - 1))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, -north);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, -north);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, -north);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, -north);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, south);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, south);
+                            AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, south);
+                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, south);
                         }
                         // north z+
                         if (!IsNeighborSolid(blocks, x, y, z + 1))
@@ -411,10 +440,10 @@ namespace Cubes
                         if (!IsNeighborSolid(blocks, x - 1, y, z))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, -east);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 1, -east);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, -east);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, -east);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, west);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 1, west);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, west);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, west);
                         }
                         // east x+
                         if (!IsNeighborSolid(blocks, x + 1, y, z))
@@ -437,20 +466,19 @@ namespace Cubes
         public static void SetMeshData(in CreateMesh buffers, ref Mesh.MeshData meshData)
         {
             var vbp = new NativeArray<VertexAttributeDescriptor>(2, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
-            vbp[0] = new VertexAttributeDescriptor(VertexAttribute.Position);
-            vbp[1] = new VertexAttributeDescriptor(VertexAttribute.Normal);
+            vbp[0] = new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.UNorm8, 4);
+            vbp[1] = new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.SNorm8, 4);
             meshData.SetVertexBufferParams(buffers.VertexCount, vbp);
 
             var pos = meshData.GetVertexData<Vertex>();
-            // TODO: Why is CopyTo slow here?
-            buffers.VertexBuffer.Slice(0, buffers.VertexCount).CopyTo(pos);
+            buffers.VertexBuffer.GetSubArray(0, buffers.VertexCount).CopyTo(pos);
 
             meshData.SetIndexBufferParams(buffers.IndexCount, IndexFormat.UInt16);
             var ib = meshData.GetIndexData<ushort>();
-            buffers.IndexBuffer.Slice(0, buffers.IndexCount).CopyTo(ib);
+            buffers.IndexBuffer.GetSubArray(0, buffers.IndexCount).CopyTo(ib);
 
             meshData.subMeshCount = 1;
-            var smd = new SubMeshDescriptor(0, ib.Length) { bounds = new((float3)(Chunk.Size / 2), (float3)Chunk.Size) };
+            var smd = new SubMeshDescriptor(0, ib.Length) { bounds = new((float3)(64 / 255f), (float3)(128 / 255f)) };
             meshData.SetSubMesh(0, smd, MeshUpdateFlags.DontRecalculateBounds | MeshUpdateFlags.DontValidateIndices);
         }
     }
