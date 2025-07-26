@@ -82,7 +82,22 @@ namespace Cubes
             }
 
             var totalMs = totalTime.ResultToString();
-            Debug.Log(Invariant($"Loaded {Chunks.Count} chunks in {totalMs}. {timers}"));
+            Debug.Log(Invariant($"Loaded {Chunks.Count} chunks in {totalMs}. {GetLoadedChunkStats()}, {timers}"));
+        }
+
+        private string GetLoadedChunkStats()
+        {
+            long verts = 0;
+            long indices = 0;
+            foreach (var chunk in Chunks)
+            {
+                if (chunk.mesh != null)
+                {
+                    verts += chunk.mesh.vertexCount;
+                    indices += chunk.mesh.GetIndexCount(0);
+                }
+            }
+            return $"{verts} verts, {indices} indices";
         }
 
         private void Unload()
@@ -132,19 +147,23 @@ namespace Cubes
                 CreateMesh.Run(chunk.chunk, ref createMesh);
             }
 
-            var dataArray = Mesh.AllocateWritableMeshData(1);
-            var meshData = dataArray[0];
+            Mesh.MeshDataArray dataArray = default;
 
             using (new TimerScope("meshdata", timers))
             {
-                CreateMesh.SetMeshData(createMesh, ref meshData);
+                if (createMesh.VertexCount > 0)
+                {
+                    dataArray = Mesh.AllocateWritableMeshData(1);
+                    var meshData = dataArray[0];
+                    CreateMesh.SetMeshData(createMesh, ref meshData);
+                }
             }
 
             Mesh mesh = chunk.mesh;
 
             using (new TimerScope("newmesh", timers))
             {
-                if (meshData.vertexCount == 0)
+                if (createMesh.VertexCount == 0)
                 {
                     DestroyImmediate(mesh);
                     mesh = null;
@@ -161,10 +180,6 @@ namespace Cubes
                 if (mesh is not null)
                 {
                     Mesh.ApplyAndDisposeWritableMeshData(dataArray, mesh, MeshUpdateFlags.DontRecalculateBounds | MeshUpdateFlags.DontValidateIndices);
-                }
-                else
-                {
-                    dataArray.Dispose();
                 }
             }
             // using (new TimerScope("normals", timers))
@@ -271,8 +286,8 @@ namespace Cubes
     {
         private NativeArray<Vertex> VertexBuffer;
         private NativeArray<ushort> IndexBuffer;
-        private int VertexCount;
-        private int IndexCount;
+        public int VertexCount;
+        public int IndexCount;
 
         private struct Vertex
         {
@@ -324,11 +339,11 @@ namespace Cubes
                         static bool IsNeighborSolid(in ReadOnlySpan<byte> blocks, int x, int y, int z)
                         {
                             // TODO: Check neighboring chunk if at the edge
-                            if (y < 0 || y >= Chunk.Size)
+                            if (y < 0 || y >= size)
                                 return false;
-                            if (z < 0 || z >= Chunk.Size)
+                            if (z < 0 || z >= size)
                                 return false;
-                            if (x < 0 || x >= Chunk.Size)
+                            if (x < 0 || x >= size)
                                 return false;
                             return GetBlock(blocks, x, y, z) != BlockType.Air;
                         }
