@@ -24,6 +24,7 @@ namespace Cubes
         }
 
         private List<LoadedChunk> Chunks = new();
+        private NativeParallelHashMap<int3, Chunk> ChunkMap;
 
         private void OnEnable()
         {
@@ -67,6 +68,7 @@ namespace Cubes
             {
                 if (Chunks.Count == 0)
                 {
+                    ChunkMap = new(1024, Allocator.Persistent);
                     CreateChunks();
                 }
             }
@@ -109,6 +111,7 @@ namespace Cubes
                 chunk.chunk.Dispose();
             }
             Chunks.Clear();
+            ChunkMap.Dispose();
         }
 
         private void CreateChunks()
@@ -122,10 +125,12 @@ namespace Cubes
                     for (int x = -viewDist.x; x < viewDist.x; x++)
                     {
                         // TODO: Do not allocate block data at this point. Only when known if chunk has more than one block type
+                        var chunk = new Chunk(new(x, y, z), Allocator.Persistent);
                         Chunks.Add(new()
                         {
-                            chunk = new Chunk(new(x, y, z), Allocator.Persistent)
+                            chunk = chunk
                         });
+                        ChunkMap.Add(chunk.Position, chunk);
                     }
                 }
             }
@@ -144,7 +149,7 @@ namespace Cubes
         {
             using (new TimerScope("mesh", timers))
             {
-                CreateMesh.Run(chunk.chunk, ref createMesh);
+                CreateMesh.Run(chunk.chunk, ChunkMap, ref createMesh);
             }
 
             Mesh.MeshDataArray dataArray = default;
@@ -331,7 +336,7 @@ namespace Cubes
         }
 
         [BurstCompile]
-        public static void Run(in Chunk chunk, ref CreateMesh buffers)
+        public static void Run(in Chunk chunk, in NativeParallelHashMap<int3, Chunk> chunks, ref CreateMesh buffers)
         {
             var verts = buffers.VertexBuffer;
             var indices = buffers.IndexBuffer;
@@ -344,6 +349,20 @@ namespace Cubes
             {
                 return blocks[y * size * size + z * size + x];
             }
+
+            static ReadOnlySpan<byte> GetNeighborBlocks(in int3 chunkPos, in NativeParallelHashMap<int3, Chunk> chunks)
+            {
+                if (chunks.TryGetValue(chunkPos, out var chunkDown))
+                    return chunkDown.Blocks.AsReadOnlySpan();
+                return ReadOnlySpan<byte>.Empty;
+            }
+
+            var blocksDown = GetNeighborBlocks(chunk.Position + new int3(0, -1, 0), chunks);
+            var blocksUp = GetNeighborBlocks(chunk.Position + new int3(0, 1, 0), chunks);
+            var blocksSouth = GetNeighborBlocks(chunk.Position + new int3(0, 0, -1), chunks);
+            var blocksNorth = GetNeighborBlocks(chunk.Position + new int3(0, 0, 1), chunks);
+            var blocksWest = GetNeighborBlocks(chunk.Position + new int3(-1, 0, 0), chunks);
+            var blocksEast = GetNeighborBlocks(chunk.Position + new int3(1, 0, 0), chunks);
 
             for (int y = 0; y < size; y++)
             {
@@ -387,16 +406,23 @@ namespace Cubes
                         sbyte4 west = new(-128, 0, 0);
                         sbyte4 east = new(127, 0, 0);
 
-                        // Skip side if neighbor block is solid (non see-through)
-                        static bool IsNeighborSolid(in ReadOnlySpan<byte> blocks, int x, int y, int z)
+                        static bool IsOpaque(in ReadOnlySpan<byte> blocks, int x, int y, int z)
                         {
                             return GetBlock(blocks, x, y, z) != BlockType.Air;
                         }
+                        static bool IsNeighborOpaque(in ReadOnlySpan<byte> blocks, int x, int y, int z)
+                        {
+                            // If neighboring chunk is not loaded, assume it's transparent so we'll see a wall if looking from outside
+                            if (blocks.IsEmpty)
+                                return false;
+                            return IsOpaque(blocks, x, y, z);
+                        }
 
-                        // TODO: Check neighboring chunk if at the edge
+                        // Only add faces where the neighboring block is transparent
+                        // IsNeighborOpaque checks in the neighboring chunk when at the edge of this chunk
 
                         // down y-
-                        if (y <= 0 || !IsNeighborSolid(blocks, x, y - 1, z))
+                        if (y > 0 ? !IsOpaque(blocks, x, y - 1, z) : !IsNeighborOpaque(blocksDown, x, size - 1, z))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, down);
@@ -405,7 +431,7 @@ namespace Cubes
                             AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, down);
                         }
                         // up y+
-                        if (y >= size - 1 || !IsNeighborSolid(blocks, x, y + 1, z))
+                        if (y < size - 1 ? !IsOpaque(blocks, x, y + 1, z) : !IsNeighborOpaque(blocksUp, x, 0, z))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, up);
@@ -414,7 +440,7 @@ namespace Cubes
                             AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, up);
                         }
                         // south z-
-                        if (z <= 0 || !IsNeighborSolid(blocks, x, y, z - 1))
+                        if (z > 0 ? !IsOpaque(blocks, x, y, z - 1) : !IsNeighborOpaque(blocksSouth, x, y, size - 1))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, south);
@@ -423,7 +449,7 @@ namespace Cubes
                             AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, south);
                         }
                         // north z+
-                        if (z >= size - 1 || !IsNeighborSolid(blocks, x, y, z + 1))
+                        if (z < size - 1 ? !IsOpaque(blocks, x, y, z + 1) : !IsNeighborOpaque(blocksNorth, x, y, 0))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, north);
@@ -432,7 +458,7 @@ namespace Cubes
                             AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, north);
                         }
                         // west x-
-                        if (x <= 0 || !IsNeighborSolid(blocks, x - 1, y, z))
+                        if (x > 0 ? !IsOpaque(blocks, x - 1, y, z) : !IsNeighborOpaque(blocksWest, size - 1, y, z))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, west);
@@ -441,7 +467,7 @@ namespace Cubes
                             AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, west);
                         }
                         // east x+
-                        if (x >= size - 1 || !IsNeighborSolid(blocks, x + 1, y, z))
+                        if (x < size - 1 ? !IsOpaque(blocks, x + 1, y, z) : !IsNeighborOpaque(blocksEast, 0, y, z))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, east);
