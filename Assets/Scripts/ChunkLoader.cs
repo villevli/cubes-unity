@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
@@ -89,17 +90,21 @@ namespace Cubes
 
         private string GetLoadedChunkStats()
         {
+            long blocks = 0;
+            long meshes = 0;
             long verts = 0;
             long indices = 0;
             foreach (var chunk in Chunks)
             {
+                blocks += chunk.chunk.Blocks.Length;
                 if (chunk.mesh != null)
                 {
+                    meshes++;
                     verts += chunk.mesh.vertexCount;
                     indices += chunk.mesh.GetIndexCount(0);
                 }
             }
-            return $"{verts} verts, {indices} indices";
+            return $"{blocks} blocks, {meshes} meshes, {verts} verts, {indices} indices";
         }
 
         private void Unload()
@@ -124,8 +129,8 @@ namespace Cubes
                 {
                     for (int x = -viewDist.x; x < viewDist.x; x++)
                     {
-                        // TODO: Do not allocate block data at this point. Only when known if chunk has more than one block type
-                        var chunk = new Chunk(new(x, y, z), Allocator.Persistent);
+                        // Do not allocate block data at this point. Only when known if chunk has more than one block type
+                        var chunk = new Chunk(new(x, y, z));
                         Chunks.Add(new()
                         {
                             chunk = chunk
@@ -141,6 +146,7 @@ namespace Cubes
             using (new TimerScope("gen", timers))
             {
                 GenerateBlocks.Run(ref chunk.chunk, ref generateBlocks);
+                ChunkMap[chunk.chunk.Position] = chunk.chunk;
             }
             return chunk;
         }
@@ -267,6 +273,15 @@ namespace Cubes
                 return ref blocks[y * size * size + z * size + x];
             }
 
+            // Generate flat ground
+            int groundLevelY = 2;
+            Span<int> palette = stackalloc int[] {
+                BlockType.Air,
+                BlockType.Stone
+            };
+
+            Span<int> paletteCounts = stackalloc int[palette.Length];
+            paletteCounts.Clear();
             int3 chunkMin = chunk.Position * size;
             for (int y = 0; y < size; y++)
             {
@@ -274,12 +289,56 @@ namespace Cubes
                 {
                     for (int x = 0; x < size; x++)
                     {
-                        GetBlock(blocks, x, y, z) = chunkMin.y + y < 2 ? BlockType.Stone : BlockType.Air;
+                        var paletteIndex = chunkMin.y + y < groundLevelY ? 1 : 0;
+                        paletteCounts[paletteIndex]++;
+                        GetBlock(blocks, x, y, z) = (byte)paletteIndex;
                     }
                 }
             }
 
-            buffers.BlockBuffer.CopyTo(chunk.Blocks);
+            UpdateChunkData(ref chunk, buffers.BlockBuffer, palette, paletteCounts);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void UpdateChunkData(ref Chunk chunk, in NativeArray<byte> blockBuffer, in Span<int> palette, in Span<int> paletteCounts)
+        {
+            int blockStateCount = 0;
+            for (int i = 0; i < paletteCounts.Length; i++)
+            {
+                if (paletteCounts[i] > 0)
+                    blockStateCount++;
+            }
+
+            // If more than one block was used, use full palette so we don't have to modify the block data
+            if (blockStateCount > 1)
+                blockStateCount = palette.Length;
+
+            if (!chunk.Palette.IsCreated || chunk.Palette.Length != blockStateCount)
+            {
+                chunk.Palette.Dispose();
+                chunk.Palette = new(blockStateCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+            }
+
+            if (blockStateCount > 1)
+            {
+                for (int i = 0; i < blockStateCount; i++)
+                {
+                    chunk.Palette[i] = palette[i];
+                }
+
+                if (!chunk.Blocks.IsCreated)
+                {
+                    chunk.Blocks = new(size * size * size, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+                }
+                blockBuffer.CopyTo(chunk.Blocks);
+            }
+            else
+            {
+                chunk.Palette[0] = palette[blockBuffer[0]];
+
+                chunk.Blocks.Dispose();
+                chunk.Blocks = default;
+            }
         }
     }
 
@@ -343,137 +402,236 @@ namespace Cubes
             int vertCount = 0;
             int indexCount = 0;
 
-            var blocks = chunk.Blocks.AsReadOnlySpan();
+            if (chunk.Palette.Length == 0 || (chunk.Palette.Length == 1 && chunk.Palette[0] == BlockType.Air))
+            {
+                buffers.VertexCount = vertCount;
+                buffers.IndexCount = indexCount;
+                return;
+            }
+
             const int size = Chunk.Size;
-            static byte GetBlock(in ReadOnlySpan<byte> blocks, int x, int y, int z)
+            static byte GetBlockIdx(in ReadOnlySpan<byte> blocks, int x, int y, int z)
             {
                 return blocks[y * size * size + z * size + x];
             }
-
-            static ReadOnlySpan<byte> GetNeighborBlocks(in int3 chunkPos, in NativeParallelHashMap<int3, Chunk> chunks)
+            static int GetBlockType(in ReadOnlySpan<byte> blocks, in ReadOnlySpan<int> palette, int x, int y, int z)
             {
-                if (chunks.TryGetValue(chunkPos, out var chunkDown))
-                    return chunkDown.Blocks.AsReadOnlySpan();
-                return ReadOnlySpan<byte>.Empty;
+                return palette[GetBlockIdx(blocks, x, y, z)];
             }
 
-            var blocksDown = GetNeighborBlocks(chunk.Position + new int3(0, -1, 0), chunks);
-            var blocksUp = GetNeighborBlocks(chunk.Position + new int3(0, 1, 0), chunks);
-            var blocksSouth = GetNeighborBlocks(chunk.Position + new int3(0, 0, -1), chunks);
-            var blocksNorth = GetNeighborBlocks(chunk.Position + new int3(0, 0, 1), chunks);
-            var blocksWest = GetNeighborBlocks(chunk.Position + new int3(-1, 0, 0), chunks);
-            var blocksEast = GetNeighborBlocks(chunk.Position + new int3(1, 0, 0), chunks);
-
-            for (int y = 0; y < size; y++)
+            static Chunk GetNeighborChunk(in int3 chunkPos, in NativeParallelHashMap<int3, Chunk> chunks)
             {
+                if (chunks.TryGetValue(chunkPos, out var chunkDown))
+                    return chunkDown;
+                return default;
+            }
+
+            var chunkDown = GetNeighborChunk(chunk.Position + new int3(0, -1, 0), chunks);
+            var chunkUp = GetNeighborChunk(chunk.Position + new int3(0, 1, 0), chunks);
+            var chunkSouth = GetNeighborChunk(chunk.Position + new int3(0, 0, -1), chunks);
+            var chunkNorth = GetNeighborChunk(chunk.Position + new int3(0, 0, 1), chunks);
+            var chunkWest = GetNeighborChunk(chunk.Position + new int3(-1, 0, 0), chunks);
+            var chunkEast = GetNeighborChunk(chunk.Position + new int3(1, 0, 0), chunks);
+
+            static void AddIndices(ref NativeArray<ushort> indices, ref int count, int vi)
+            {
+                indices[count++] = (ushort)(vi + 0);
+                indices[count++] = (ushort)(vi + 1);
+                indices[count++] = (ushort)(vi + 2);
+                indices[count++] = (ushort)(vi + 2);
+                indices[count++] = (ushort)(vi + 3);
+                indices[count++] = (ushort)(vi + 0);
+            }
+
+            static void AddVertex(ref NativeArray<Vertex> verts, ref int count, int x, int y, int z, in sbyte4 normal)
+            {
+                verts[count++] = new()
+                {
+                    position = new(
+                        (byte)(x * (128 / size)),
+                        (byte)(y * (128 / size)),
+                        (byte)(z * (128 / size))
+                    // TODO: pack the normal in the w byte, use custom shader
+                    ),
+                    normal = normal
+                };
+            }
+
+            sbyte4 down = new(0, -128, 0);
+            sbyte4 up = new(0, 127, 0);
+            sbyte4 south = new(0, 0, -128);
+            sbyte4 north = new(0, 0, 127);
+            sbyte4 west = new(-128, 0, 0);
+            sbyte4 east = new(127, 0, 0);
+
+            static bool IsBlockOpaque(in int block)
+            {
+                return block != BlockType.Air;
+            }
+            static bool IsOpaque(in ReadOnlySpan<byte> blocks, in ReadOnlySpan<int> palette, int x, int y, int z)
+            {
+                return IsBlockOpaque(GetBlockType(blocks, palette, x, y, z));
+            }
+            static bool IsNeighborOpaque(in Chunk chunk, int x, int y, int z)
+            {
+                // If neighboring chunk is not loaded, assume it's transparent so we'll see a wall if looking from outside
+                if (!chunk.IsLoaded)
+                    return false;
+                if (chunk.Palette.Length == 1)
+                    return IsBlockOpaque(chunk.Palette[0]);
+                return IsOpaque(chunk.Blocks, chunk.Palette, x, y, z);
+            }
+
+            if (chunk.Palette.Length == 1)
+            {
+                // Iterate only the edges of the chunk when the chunk has only one block type
                 for (int z = 0; z < size; z++)
                 {
                     for (int x = 0; x < size; x++)
                     {
-                        byte block = GetBlock(blocks, x, y, z);
-
-                        if (block == BlockType.Air)
-                            continue;
-
-                        static void AddIndices(ref NativeArray<ushort> indices, ref int count, int vi)
-                        {
-                            indices[count++] = (ushort)(vi + 0);
-                            indices[count++] = (ushort)(vi + 1);
-                            indices[count++] = (ushort)(vi + 2);
-                            indices[count++] = (ushort)(vi + 2);
-                            indices[count++] = (ushort)(vi + 3);
-                            indices[count++] = (ushort)(vi + 0);
-                        }
-
-                        static void AddVertex(ref NativeArray<Vertex> verts, ref int count, int x, int y, int z, in sbyte4 normal)
-                        {
-                            verts[count++] = new()
-                            {
-                                position = new(
-                                    (byte)(x * (128 / size)),
-                                    (byte)(y * (128 / size)),
-                                    (byte)(z * (128 / size))
-                                // TODO: pack the normal in the w byte, use custom shader
-                                ),
-                                normal = normal
-                            };
-                        }
-
-                        sbyte4 down = new(0, -128, 0);
-                        sbyte4 up = new(0, 127, 0);
-                        sbyte4 south = new(0, 0, -128);
-                        sbyte4 north = new(0, 0, 127);
-                        sbyte4 west = new(-128, 0, 0);
-                        sbyte4 east = new(127, 0, 0);
-
-                        static bool IsOpaque(in ReadOnlySpan<byte> blocks, int x, int y, int z)
-                        {
-                            return GetBlock(blocks, x, y, z) != BlockType.Air;
-                        }
-                        static bool IsNeighborOpaque(in ReadOnlySpan<byte> blocks, int x, int y, int z)
-                        {
-                            // If neighboring chunk is not loaded, assume it's transparent so we'll see a wall if looking from outside
-                            if (blocks.IsEmpty)
-                                return false;
-                            return IsOpaque(blocks, x, y, z);
-                        }
-
-                        // Only add faces where the neighboring block is transparent
-                        // IsNeighborOpaque checks in the neighboring chunk when at the edge of this chunk
-
                         // down y-
-                        if (y > 0 ? !IsOpaque(blocks, x, y - 1, z) : !IsNeighborOpaque(blocksDown, x, size - 1, z))
+                        if (!IsNeighborOpaque(chunkDown, x, size - 1, z))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, down);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, down);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, down);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, down);
+                            AddVertex(ref verts, ref vertCount, x + 0, 0, z + 0, down);
+                            AddVertex(ref verts, ref vertCount, x + 1, 0, z + 0, down);
+                            AddVertex(ref verts, ref vertCount, x + 1, 0, z + 1, down);
+                            AddVertex(ref verts, ref vertCount, x + 0, 0, z + 1, down);
                         }
                         // up y+
-                        if (y < size - 1 ? !IsOpaque(blocks, x, y + 1, z) : !IsNeighborOpaque(blocksUp, x, 0, z))
+                        if (!IsNeighborOpaque(chunkUp, x, 0, z))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, up);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 1, up);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 1, up);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, up);
+                            AddVertex(ref verts, ref vertCount, x + 0, size, z + 0, up);
+                            AddVertex(ref verts, ref vertCount, x + 0, size, z + 1, up);
+                            AddVertex(ref verts, ref vertCount, x + 1, size, z + 1, up);
+                            AddVertex(ref verts, ref vertCount, x + 1, size, z + 0, up);
                         }
+                    }
+                }
+
+                for (int y = 0; y < size; y++)
+                {
+                    for (int x = 0; x < size; x++)
+                    {
                         // south z-
-                        if (z > 0 ? !IsOpaque(blocks, x, y, z - 1) : !IsNeighborOpaque(blocksSouth, x, y, size - 1))
+                        if (!IsNeighborOpaque(chunkSouth, x, y, size - 1))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, south);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, south);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, south);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, south);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, 0, south);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, 0, south);
+                            AddVertex(ref verts, ref vertCount, x + 1, y + 1, 0, south);
+                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, 0, south);
                         }
                         // north z+
-                        if (z < size - 1 ? !IsOpaque(blocks, x, y, z + 1) : !IsNeighborOpaque(blocksNorth, x, y, 0))
+                        if (!IsNeighborOpaque(chunkNorth, x, y, 0))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, north);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 1, north);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 1, north);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, north);
+                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, size, north);
+                            AddVertex(ref verts, ref vertCount, x + 1, y + 1, size, north);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, size, north);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, size, north);
                         }
+                    }
+                }
+
+                for (int y = 0; y < size; y++)
+                {
+                    for (int z = 0; z < size; z++)
+                    {
                         // west x-
-                        if (x > 0 ? !IsOpaque(blocks, x - 1, y, z) : !IsNeighborOpaque(blocksWest, size - 1, y, z))
+                        if (!IsNeighborOpaque(chunkWest, size - 1, y, z))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, west);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 1, west);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, west);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, west);
+                            AddVertex(ref verts, ref vertCount, 0, y + 0, z + 1, west);
+                            AddVertex(ref verts, ref vertCount, 0, y + 1, z + 1, west);
+                            AddVertex(ref verts, ref vertCount, 0, y + 1, z + 0, west);
+                            AddVertex(ref verts, ref vertCount, 0, y + 0, z + 0, west);
                         }
                         // east x+
-                        if (x < size - 1 ? !IsOpaque(blocks, x + 1, y, z) : !IsNeighborOpaque(blocksEast, 0, y, z))
+                        if (!IsNeighborOpaque(chunkEast, 0, y, z))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, east);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, east);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 1, east);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, east);
+                            AddVertex(ref verts, ref vertCount, size, y + 0, z + 0, east);
+                            AddVertex(ref verts, ref vertCount, size, y + 1, z + 0, east);
+                            AddVertex(ref verts, ref vertCount, size, y + 1, z + 1, east);
+                            AddVertex(ref verts, ref vertCount, size, y + 0, z + 1, east);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                var blocks = chunk.Blocks.AsReadOnlySpan();
+                var palette = chunk.Palette.AsReadOnlySpan();
+                for (int y = 0; y < size; y++)
+                {
+                    for (int z = 0; z < size; z++)
+                    {
+                        for (int x = 0; x < size; x++)
+                        {
+                            int block = GetBlockType(blocks, palette, x, y, z);
+
+                            if (block == BlockType.Air)
+                                continue;
+
+                            // Only add faces where the neighboring block is transparent
+                            // IsNeighborOpaque checks in the neighboring chunk when at the edge of this chunk
+
+                            // down y-
+                            if (y > 0 ? !IsOpaque(blocks, palette, x, y - 1, z) : !IsNeighborOpaque(chunkDown, x, size - 1, z))
+                            {
+                                AddIndices(ref indices, ref indexCount, vertCount);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, down);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, down);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, down);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, down);
+                            }
+                            // up y+
+                            if (y < size - 1 ? !IsOpaque(blocks, palette, x, y + 1, z) : !IsNeighborOpaque(chunkUp, x, 0, z))
+                            {
+                                AddIndices(ref indices, ref indexCount, vertCount);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, up);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 1, up);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 1, up);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, up);
+                            }
+                            // south z-
+                            if (z > 0 ? !IsOpaque(blocks, palette, x, y, z - 1) : !IsNeighborOpaque(chunkSouth, x, y, size - 1))
+                            {
+                                AddIndices(ref indices, ref indexCount, vertCount);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, south);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, south);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, south);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, south);
+                            }
+                            // north z+
+                            if (z < size - 1 ? !IsOpaque(blocks, palette, x, y, z + 1) : !IsNeighborOpaque(chunkNorth, x, y, 0))
+                            {
+                                AddIndices(ref indices, ref indexCount, vertCount);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, north);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 1, north);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 1, north);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, north);
+                            }
+                            // west x-
+                            if (x > 0 ? !IsOpaque(blocks, palette, x - 1, y, z) : !IsNeighborOpaque(chunkWest, size - 1, y, z))
+                            {
+                                AddIndices(ref indices, ref indexCount, vertCount);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, west);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 1, west);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, west);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, west);
+                            }
+                            // east x+
+                            if (x < size - 1 ? !IsOpaque(blocks, palette, x + 1, y, z) : !IsNeighborOpaque(chunkEast, 0, y, z))
+                            {
+                                AddIndices(ref indices, ref indexCount, vertCount);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, east);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, east);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 1, east);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, east);
+                            }
                         }
                     }
                 }

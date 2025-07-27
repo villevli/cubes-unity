@@ -6,8 +6,8 @@ namespace Cubes
 {
     public static class BlockType
     {
-        public const byte Air = 0;
-        public const byte Stone = 1;
+        public const int Air = 0;
+        public const int Stone = 1;
     }
 
     public struct Chunk : IDisposable
@@ -17,26 +17,39 @@ namespace Cubes
         /// </summary>
         public const int Size = 16;
 
-        // TODO: To support many block types and states, add a palette of block states like described in https://minecraft.wiki/w/Chunk_format
+        // To support many block types and states, use a palette of block states like described in https://minecraft.wiki/w/Chunk_format
+
         /// <summary>
-        /// Block data in this chunk.
+        /// Block data in this chunk. Contains indices into the <see cref="Palette"/> array.
         /// </summary>
         public NativeArray<byte> Blocks;
+
+        /// <summary>
+        /// Block types and states contained in this chunk. If it contains a single element then the <see cref="Blocks"/> array is not needed.
+        /// </summary>
+        public NativeArray<int> Palette;
 
         /// <summary>
         /// Position in chunks from the world origin.
         /// </summary>
         public int3 Position;
 
-        public Chunk(int3 position, Allocator allocator)
+        /// <summary>
+        /// Has the chunks's data been loaded.
+        /// </summary>
+        public bool IsLoaded => Palette.IsCreated;
+
+        public Chunk(int3 position)
         {
             Position = position;
-            Blocks = new(Size * Size * Size, allocator, NativeArrayOptions.ClearMemory);
+            Blocks = default;
+            Palette = default;
         }
 
         public void Dispose()
         {
             Blocks.Dispose();
+            Palette.Dispose();
         }
 
         public override readonly string ToString()
