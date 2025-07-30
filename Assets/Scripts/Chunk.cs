@@ -58,13 +58,33 @@ namespace Cubes
         }
 
         /// <summary>
-        /// Get a block at the local <paramref name="pos"/> in the chunk.
+        /// Get a reference to the block at the local <paramref name="pos"/> in the chunk.
         /// </summary>
+        /// <param name="blocks"></param>
         /// <param name="pos"></param>
         /// <returns></returns>
-        public readonly ref byte GetBlock(int3 pos)
+        public static ref byte GetBlock(in Span<byte> blocks, in int3 pos)
         {
-            return ref Blocks.AsSpan()[pos.y * Size * Size + pos.z * Size + pos.x];
+            return ref GetBlock(blocks, pos.x, pos.y, pos.z);
+        }
+        public static ref byte GetBlock(in Span<byte> blocks, int x, int y, int z)
+        {
+            return ref blocks[y * Size * Size + z * Size + x];
+        }
+
+        /// <summary>
+        /// Get the block at the local <paramref name="pos"/> in the chunk.
+        /// </summary>
+        /// <param name="blocks"></param>
+        /// <param name="pos"></param>
+        /// <returns></returns>
+        public static byte GetBlock(in ReadOnlySpan<byte> blocks, in int3 pos)
+        {
+            return GetBlock(blocks, pos.x, pos.y, pos.z);
+        }
+        public static byte GetBlock(in ReadOnlySpan<byte> blocks, int x, int y, int z)
+        {
+            return blocks[y * Size * Size + z * Size + x];
         }
     }
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
@@ -13,9 +14,13 @@ namespace Cubes
     public class ChunkLoader : MonoBehaviour
     {
         [SerializeField]
-        private int3 _viewDistance = 8;
+        private int _viewDistance = 8;
         [SerializeField]
         private GameObject _chunkPrefab;
+        [SerializeField]
+        private GenerateBlocks.Params _generator = GenerateBlocks.Params.Default;
+
+        private bool _isDirty;
 
         private struct LoadedChunk
         {
@@ -30,6 +35,7 @@ namespace Cubes
         private void OnEnable()
         {
             Application.targetFrameRate = 60;
+            _isDirty = false;
 
             Load();
         }
@@ -49,6 +55,27 @@ namespace Cubes
             if (GUILayout.Button("Load"))
             {
                 Load();
+            }
+        }
+
+        private void OnValidate()
+        {
+            _isDirty = true;
+        }
+
+        private void Start()
+        {
+            SlowUpdate(destroyCancellationToken);
+        }
+
+        private async void SlowUpdate(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                if (isActiveAndEnabled && _isDirty)
+                    Load();
+
+                await Awaitable.WaitForSecondsAsync(0.1f);
             }
         }
 
@@ -85,7 +112,9 @@ namespace Cubes
             }
 
             var totalMs = totalTime.ResultToString();
-            Debug.Log(Invariant($"Loaded {Chunks.Count} chunks in {totalMs}. {GetLoadedChunkStats()}, {timers}"));
+            if (!_isDirty)
+                Debug.Log(Invariant($"Loaded {Chunks.Count} chunks in {totalMs}. {GetLoadedChunkStats()}, {timers}"));
+            _isDirty = false;
         }
 
         private string GetLoadedChunkStats()
@@ -145,7 +174,7 @@ namespace Cubes
         {
             using (new TimerScope("gen", timers))
             {
-                GenerateBlocks.Run(ref chunk.chunk, ref generateBlocks);
+                GenerateBlocks.Run(ref chunk.chunk, ref generateBlocks, _generator);
                 ChunkMap[chunk.chunk.Position] = chunk.chunk;
             }
             return chunk;
@@ -252,6 +281,35 @@ namespace Cubes
     {
         const int size = Chunk.Size;
 
+        public enum Type
+        {
+            Flat,
+            Plane,
+            SimplexNoise2D,
+            PerlinNoise2D,
+            SimplexNoise3D,
+            PerlinNoise3D
+        }
+
+        [Serializable]
+        public struct Params
+        {
+            public Type Type;
+            public float3 Offset;
+            public float3 Scale;
+            public float Offset2;
+            public float Scale2;
+
+            public static readonly Params Default = new()
+            {
+                Type = Type.Flat,
+                Offset = 0,
+                Scale = 1,
+                Offset2 = 0,
+                Scale2 = 1
+            };
+        }
+
         private NativeArray<byte> BlockBuffer;
 
         public GenerateBlocks(Allocator allocator)
@@ -264,17 +322,11 @@ namespace Cubes
             BlockBuffer.Dispose();
         }
 
-        [BurstCompile]
-        public static void Run(ref Chunk chunk, ref GenerateBlocks buffers)
+        [BurstCompile(FloatMode = FloatMode.Fast)]
+        public static void Run(ref Chunk chunk, ref GenerateBlocks buffers, in Params p)
         {
             var blocks = buffers.BlockBuffer.AsSpan();
-            static ref byte GetBlock(in Span<byte> blocks, int x, int y, int z)
-            {
-                return ref blocks[y * size * size + z * size + x];
-            }
 
-            // Generate flat ground
-            int groundLevelY = 2;
             Span<int> palette = stackalloc int[] {
                 BlockType.Air,
                 BlockType.Stone
@@ -283,20 +335,171 @@ namespace Cubes
             Span<int> paletteCounts = stackalloc int[palette.Length];
             paletteCounts.Clear();
             int3 chunkMin = chunk.Position * size;
+
+            switch (p.Type)
+            {
+                case Type.Flat:
+                    GenerateFlat(p, blocks, chunkMin, paletteCounts);
+                    break;
+                case Type.Plane:
+                    GeneratePlane(p, blocks, chunkMin, paletteCounts);
+                    break;
+                case Type.SimplexNoise2D:
+                    GenerateSimplexNoise2D(p, blocks, chunkMin, paletteCounts);
+                    break;
+                case Type.PerlinNoise2D:
+                    GeneratePerlinNoise2D(p, blocks, chunkMin, paletteCounts);
+                    break;
+                case Type.SimplexNoise3D:
+                    GenerateSimplexNoise3D(p, blocks, chunkMin, paletteCounts);
+                    break;
+                case Type.PerlinNoise3D:
+                    GeneratePerlinNoise3D(p, blocks, chunkMin, paletteCounts);
+                    break;
+            }
+
+            UpdateChunkData(ref chunk, buffers.BlockBuffer, palette, paletteCounts);
+        }
+
+        private static void GenerateFlat(in Params p, in Span<byte> blocks, in int3 chunkMin, in Span<int> paletteCounts)
+        {
+            var offset = chunkMin - p.Offset;
+            var scale = p.Scale;
+
+            for (int y = 0; y < size; y++)
+            {
+                var ay = (y + offset.y) * scale.y;
+                var paletteIndex = -ay > 0 ? 1 : 0;
+                paletteCounts[paletteIndex] += size * size;
+                for (int z = 0; z < size; z++)
+                {
+                    for (int x = 0; x < size; x++)
+                    {
+                        Chunk.GetBlock(blocks, x, y, z) = (byte)paletteIndex;
+                    }
+                }
+            }
+        }
+
+        private static void GeneratePlane(in Params p, in Span<byte> blocks, in int3 chunkMin, in Span<int> paletteCounts)
+        {
+            var offset = chunkMin - p.Offset;
+            var scale = p.Scale;
+
+            for (int x = 0; x < size; x++)
+            {
+                for (int z = 0; z < size; z++)
+                {
+                    var xz = (new int2(x, z) + offset.xz) * scale.xz;
+                    var val = xz.x + xz.y;
+
+                    for (int y = 0; y < size; y++)
+                    {
+                        var ay = (y + offset.y) * scale.y;
+                        var paletteIndex = val - ay > 0 ? 1 : 0;
+                        paletteCounts[paletteIndex]++;
+                        Chunk.GetBlock(blocks, x, y, z) = (byte)paletteIndex;
+                    }
+                }
+            }
+        }
+
+        private static void GenerateSimplexNoise2D(in Params p, in Span<byte> blocks, in int3 chunkMin, in Span<int> paletteCounts)
+        {
+            var offset = chunkMin - p.Offset;
+            var scale = p.Scale * 0.025f;
+            var offset2 = p.Offset2;
+            var scale2 = p.Scale2 * 0.5f;
+
+            for (int x = 0; x < size; x++)
+            {
+                for (int z = 0; z < size; z++)
+                {
+                    var xz = (new int2(x, z) + offset.xz) * scale.xz;
+                    var val = (noise.snoise(xz) + offset2) * scale2;
+
+                    for (int y = 0; y < size; y++)
+                    {
+                        var ay = (y + offset.y) * scale.y;
+                        var paletteIndex = val - ay > 0 ? 1 : 0;
+                        paletteCounts[paletteIndex]++;
+                        Chunk.GetBlock(blocks, x, y, z) = (byte)paletteIndex;
+                    }
+                }
+            }
+        }
+
+        private static void GeneratePerlinNoise2D(in Params p, in Span<byte> blocks, in int3 chunkMin, in Span<int> paletteCounts)
+        {
+            var offset = chunkMin - p.Offset;
+            var scale = p.Scale * 0.05f;
+            var offset2 = p.Offset2;
+            var scale2 = p.Scale2;
+
+            for (int x = 0; x < size; x++)
+            {
+                for (int z = 0; z < size; z++)
+                {
+                    var xz = (new int2(x, z) + offset.xz) * scale.xz;
+                    var val = (noise.cnoise(xz) + offset2) * scale2;
+
+                    for (int y = 0; y < size; y++)
+                    {
+                        var ay = (y + offset.y) * scale.y;
+                        var paletteIndex = val - ay > 0 ? 1 : 0;
+                        paletteCounts[paletteIndex]++;
+                        Chunk.GetBlock(blocks, x, y, z) = (byte)paletteIndex;
+                    }
+                }
+            }
+        }
+
+        private static void GenerateSimplexNoise3D(in Params p, in Span<byte> blocks, in int3 chunkMin, in Span<int> paletteCounts)
+        {
+            var offset = chunkMin - p.Offset;
+            var scale = p.Scale * 0.025f;
+            var offset2 = p.Offset2;
+            var scale2 = p.Scale2 * 0.5f;
+
             for (int y = 0; y < size; y++)
             {
                 for (int z = 0; z < size; z++)
                 {
                     for (int x = 0; x < size; x++)
                     {
-                        var paletteIndex = chunkMin.y + y < groundLevelY ? 1 : 0;
+                        var xyz = (new int3(x, y, z) + offset) * scale;
+                        var val = (noise.snoise(xyz) + offset2) * scale2;
+
+                        var paletteIndex = val - xyz.y > 0 ? 1 : 0;
                         paletteCounts[paletteIndex]++;
-                        GetBlock(blocks, x, y, z) = (byte)paletteIndex;
+                        Chunk.GetBlock(blocks, x, y, z) = (byte)paletteIndex;
                     }
                 }
             }
+        }
 
-            UpdateChunkData(ref chunk, buffers.BlockBuffer, palette, paletteCounts);
+        private static void GeneratePerlinNoise3D(in Params p, in Span<byte> blocks, in int3 chunkMin, in Span<int> paletteCounts)
+        {
+            var offset = chunkMin - p.Offset;
+            var scale = p.Scale * 0.05f;
+            var offset2 = p.Offset2;
+            var scale2 = p.Scale2;
+
+            for (int y = 0; y < size; y++)
+            {
+                for (int z = 0; z < size; z++)
+                {
+                    for (int x = 0; x < size; x++)
+                    {
+                        var xyz = (new int3(x, y, z) + offset) * scale;
+                        var val = (noise.cnoise(xyz) + offset2) * scale2;
+
+                        var paletteIndex = val - xyz.y > 0 ? 1 : 0;
+                        paletteCounts[paletteIndex]++;
+                        Chunk.GetBlock(blocks, x, y, z) = (byte)paletteIndex;
+                    }
+                }
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -410,13 +613,10 @@ namespace Cubes
             }
 
             const int size = Chunk.Size;
-            static byte GetBlockIdx(in ReadOnlySpan<byte> blocks, int x, int y, int z)
-            {
-                return blocks[y * size * size + z * size + x];
-            }
+
             static int GetBlockType(in ReadOnlySpan<byte> blocks, in ReadOnlySpan<int> palette, int x, int y, int z)
             {
-                return palette[GetBlockIdx(blocks, x, y, z)];
+                return palette[Chunk.GetBlock(blocks, x, y, z)];
             }
 
             static Chunk GetNeighborChunk(in int3 chunkPos, in NativeParallelHashMap<int3, Chunk> chunks)
