@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
@@ -19,6 +20,9 @@ namespace Cubes
         private GameObject _chunkPrefab;
         [SerializeField]
         private GenerateBlocks.Params _generator = GenerateBlocks.Params.Default;
+
+        [SerializeField]
+        private bool _useMultipleThreads = true;
 
         private bool _isDirty;
 
@@ -101,20 +105,24 @@ namespace Cubes
                 }
             }
 
-            for (int i = 0; i < Chunks.Count; i++)
+            if (_useMultipleThreads)
             {
-                Chunks[i] = GenerateChunk(Chunks[i], ref generateBlocks, timers);
+                GenerateChunksMultithreaded(Chunks, _generator, timers);
+            }
+            else
+            {
+                GenerateChunks(Chunks, ref generateBlocks, _generator, timers);
             }
 
-            for (int i = 0; i < Chunks.Count; i++)
-            {
-                Chunks[i] = CreateChunkMesh(Chunks[i], ref createMesh, timers);
-            }
+            CreateChunkMeshes(Chunks, ref createMesh, timers);
 
             var totalMs = totalTime.ResultToString();
             if (!_isDirty)
                 Debug.Log(Invariant($"Loaded {Chunks.Count} chunks in {totalMs}. {GetLoadedChunkStats()}, {timers}"));
             _isDirty = false;
+
+            generateBlocks.Dispose();
+            createMesh.Dispose();
         }
 
         private string GetLoadedChunkStats()
@@ -170,14 +178,56 @@ namespace Cubes
             }
         }
 
-        private LoadedChunk GenerateChunk(LoadedChunk chunk, ref GenerateBlocks generateBlocks, TimerResults timers)
+        private void GenerateChunks(List<LoadedChunk> chunks, ref GenerateBlocks generateBlocks, in GenerateBlocks.Params p, TimerResults timers)
         {
             using (new TimerScope("gen", timers))
             {
-                GenerateBlocks.Run(ref chunk.chunk, ref generateBlocks, _generator);
-                ChunkMap[chunk.chunk.Position] = chunk.chunk;
+                for (int i = 0; i < chunks.Count; i++)
+                {
+                    var chunk = chunks[i];
+                    GenerateBlocks.Run(ref chunk.chunk, ref generateBlocks, p);
+                    chunks[i] = chunk;
+                    ChunkMap[chunk.chunk.Position] = chunk.chunk;
+                }
             }
-            return chunk;
+        }
+
+        private void GenerateChunksMultithreaded(List<LoadedChunk> chunks, GenerateBlocks.Params p, TimerResults timers)
+        {
+            const int threads = 8;
+
+            using (new TimerScope("gen", timers))
+            {
+                var tasks = new Task[threads];
+
+                for (int i = 0; i < threads; i++)
+                {
+                    int count = chunks.Count / threads;
+                    int startIndex = i * count;
+                    tasks[i] = Task.Run(() =>
+                    {
+                        var buffers = new GenerateBlocks(Allocator.TempJob);
+                        for (int i = startIndex; i < startIndex + count; i++)
+                        {
+                            var chunk = chunks[i];
+                            GenerateBlocks.Run(ref chunk.chunk, ref buffers, p);
+                            chunks[i] = chunk;
+                            ChunkMap[chunk.chunk.Position] = chunk.chunk;
+                        }
+                        buffers.Dispose();
+                    });
+                }
+
+                Task.WaitAll(tasks);
+            }
+        }
+
+        private void CreateChunkMeshes(List<LoadedChunk> chunks, ref CreateMesh createMesh, TimerResults timers)
+        {
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                chunks[i] = CreateChunkMesh(chunks[i], ref createMesh, timers);
+            }
         }
 
         private LoadedChunk CreateChunkMesh(LoadedChunk chunk, ref CreateMesh createMesh, TimerResults timers)
