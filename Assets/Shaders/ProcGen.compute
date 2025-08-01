@@ -1,0 +1,81 @@
+#pragma kernel ProcGenPerlin3D
+#pragma kernel ProcGenSimplex3D
+
+#include "ClassicNoise.hlsl"
+#include "SimplexNoise.hlsl"
+
+StructuredBuffer<int3> ChunkMinBuf;
+RWStructuredBuffer<int> Result;
+
+float4 Offset;
+float4 Scale;
+float Offset2;
+float Scale2;
+
+[numthreads(1,16,64)]
+void ProcGenPerlin3D(uint3 id : SV_DispatchThreadID)
+{
+    uint chunkIndex = id.x;
+    int y = id.y;
+    int z = id.z / 4;
+    int x = id.z % 4;
+
+    int3 chunkMin = ChunkMinBuf[chunkIndex];
+
+    uint resultIndex = chunkIndex * 16 * 16 * 4 + y * 16 * 4 + z * 4 + x;
+
+    // Calculate value for 4 blocks along the x axis and pack into the int
+    int result = 0;
+
+    for (int i = 0; i < 4; i++)
+    {
+        float3 xyz = int3(x * 4 + i, y, z) + chunkMin;
+
+        // Noise offset and frequency
+        xyz = (xyz - Offset.xyz) * Scale.xyz;
+        // Perlin noise
+        float val = cnoise(xyz);
+        // Result offset and scale
+        val = (val + Offset2) * Scale2;
+        // Surface at y 0
+        val = val - xyz.y;
+
+        result |= (val > 0 ? 1 : 0) << (i * 8);
+    }
+
+    Result[resultIndex] = result;
+}
+
+[numthreads(1,16,64)]
+void ProcGenSimplex3D(uint3 id : SV_DispatchThreadID)
+{
+    uint chunkIndex = id.x;
+    int y = id.y;
+    int z = id.z / 4;
+    int x = id.z % 4;
+
+    int3 chunkMin = ChunkMinBuf[chunkIndex];
+
+    uint resultIndex = chunkIndex * 16 * 16 * 4 + y * 16 * 4 + z * 4 + x;
+
+    // Calculate value for 4 blocks along the x axis and pack into the int
+    int result = 0;
+
+    for (int i = 0; i < 4; i++)
+    {
+        float3 xyz = int3(x * 4 + i, y, z) + chunkMin;
+
+        // Noise offset and frequency
+        xyz = (xyz - Offset.xyz) * Scale.xyz;
+        // Simplex noise
+        float val = snoise(xyz);
+        // Result offset and scale
+        val = (val + Offset2) * Scale2;
+        // Surface at y 0
+        val = val - xyz.y;
+
+        result |= (val > 0 ? 1 : 0) << (i * 8);
+    }
+
+    Result[resultIndex] = result;
+}

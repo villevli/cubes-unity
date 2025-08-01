@@ -21,6 +21,11 @@ namespace Cubes
         [SerializeField]
         private bool _useMultipleThreads = true;
 
+        [SerializeField]
+        private bool _useGPUCompute = true;
+        [SerializeField]
+        private ComputeShader _procGenShader;
+
         private bool _isDirty;
 
         private struct LoadedChunk
@@ -86,10 +91,12 @@ namespace Cubes
             var totalTime = new TimerScope("total", null);
 
             GenerateBlocks generateBlocks;
+            GenerateBlocksGPU generateBlocksGPU;
             CreateMesh createMesh;
             using (new TimerScope("buffers", timers))
             {
                 generateBlocks = new GenerateBlocks(Allocator.Temp);
+                generateBlocksGPU = new GenerateBlocksGPU(Allocator.Temp);
                 createMesh = new CreateMesh(Allocator.Temp);
             }
 
@@ -102,7 +109,11 @@ namespace Cubes
                 }
             }
 
-            if (_useMultipleThreads)
+            if (_useGPUCompute && GenerateBlocksGPU.IsTypeSupported(_generator))
+            {
+                GenerateChunksOnGPU(Chunks, ref generateBlocksGPU, _generator, timers);
+            }
+            else if (_useMultipleThreads)
             {
                 GenerateChunksMultithreaded(Chunks, _generator, timers);
             }
@@ -119,6 +130,7 @@ namespace Cubes
             _isDirty = false;
 
             generateBlocks.Dispose();
+            generateBlocksGPU.Dispose();
             createMesh.Dispose();
         }
 
@@ -216,6 +228,27 @@ namespace Cubes
                 }
 
                 Task.WaitAll(tasks);
+            }
+        }
+
+        private void GenerateChunksOnGPU(List<LoadedChunk> chunks, ref GenerateBlocksGPU generateBlocks, in GenerateBlocks.Params p, TimerResults timers)
+        {
+            var chunksArray = new NativeArray<Chunk>(chunks.Count, Allocator.Temp);
+
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                chunksArray[i] = chunks[i].chunk;
+            }
+
+            GenerateBlocksGPU.Run(ref chunksArray, ref generateBlocks, p, _procGenShader, timers);
+
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                var chunk = chunks[i];
+                chunk.chunk = chunksArray[i];
+                chunks[i] = chunk;
+
+                ChunkMap[chunk.chunk.Position] = chunk.chunk;
             }
         }
 
