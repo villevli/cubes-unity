@@ -97,7 +97,7 @@ namespace Cubes
 
             using (new TimerScope("readback", timers))
             {
-                var readback = AsyncGPUReadback.RequestIntoNativeArray(ref result, resultCBuf, result.Length * 4, 0);
+                var readback = AsyncGPUReadback.RequestIntoNativeArray(ref result, resultCBuf, chunks.Length * size * size * size, 0);
                 readback.WaitForCompletion();
             }
 
