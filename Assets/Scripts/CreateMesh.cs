@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
@@ -45,6 +46,19 @@ namespace Cubes
             }
         }
 
+        [Serializable]
+        public struct Params
+        {
+            [Tooltip("If neighboring chunk is not loaded, add a wall when looking from outside")]
+            [MarshalAs(UnmanagedType.U1)]
+            public bool AddBorderWalls;
+
+            public static readonly Params Default = new()
+            {
+                AddBorderWalls = true,
+            };
+        }
+
         public CreateMesh(Allocator allocator)
         {
             VertexBuffer = new NativeArray<Vertex>(32768, allocator, NativeArrayOptions.UninitializedMemory);
@@ -60,7 +74,7 @@ namespace Cubes
         }
 
         [BurstCompile]
-        public static void Run(in Chunk chunk, in NativeParallelHashMap<int3, Chunk> chunks, ref CreateMesh buffers)
+        public static void Run(in Chunk chunk, in NativeParallelHashMap<int3, Chunk> chunks, ref CreateMesh buffers, in Params p)
         {
             var verts = buffers.VertexBuffer;
             var indices = buffers.IndexBuffer;
@@ -134,11 +148,10 @@ namespace Cubes
             {
                 return IsBlockOpaque(GetBlockType(blocks, palette, x, y, z));
             }
-            static bool IsNeighborOpaque(in Chunk chunk, int x, int y, int z)
+            static bool IsNeighborOpaque(in Chunk chunk, int x, int y, int z, in Params p)
             {
-                // If neighboring chunk is not loaded, assume it's transparent so we'll see a wall if looking from outside
                 if (!chunk.IsLoaded)
-                    return false;
+                    return !p.AddBorderWalls;
                 if (chunk.Palette.Length == 1)
                     return IsBlockOpaque(chunk.Palette[0]);
                 return IsOpaque(chunk.Blocks, chunk.Palette, x, y, z);
@@ -152,7 +165,7 @@ namespace Cubes
                     for (int x = 0; x < size; x++)
                     {
                         // down y-
-                        if (!IsNeighborOpaque(chunkDown, x, size - 1, z))
+                        if (!IsNeighborOpaque(chunkDown, x, size - 1, z, p))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 0, 0, z + 0, down);
@@ -161,7 +174,7 @@ namespace Cubes
                             AddVertex(ref verts, ref vertCount, x + 0, 0, z + 1, down);
                         }
                         // up y+
-                        if (!IsNeighborOpaque(chunkUp, x, 0, z))
+                        if (!IsNeighborOpaque(chunkUp, x, 0, z, p))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 0, size, z + 0, up);
@@ -177,7 +190,7 @@ namespace Cubes
                     for (int x = 0; x < size; x++)
                     {
                         // south z-
-                        if (!IsNeighborOpaque(chunkSouth, x, y, size - 1))
+                        if (!IsNeighborOpaque(chunkSouth, x, y, size - 1, p))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 0, y + 0, 0, south);
@@ -186,7 +199,7 @@ namespace Cubes
                             AddVertex(ref verts, ref vertCount, x + 1, y + 0, 0, south);
                         }
                         // north z+
-                        if (!IsNeighborOpaque(chunkNorth, x, y, 0))
+                        if (!IsNeighborOpaque(chunkNorth, x, y, 0, p))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, x + 1, y + 0, size, north);
@@ -202,7 +215,7 @@ namespace Cubes
                     for (int z = 0; z < size; z++)
                     {
                         // west x-
-                        if (!IsNeighborOpaque(chunkWest, size - 1, y, z))
+                        if (!IsNeighborOpaque(chunkWest, size - 1, y, z, p))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, 0, y + 0, z + 1, west);
@@ -211,7 +224,7 @@ namespace Cubes
                             AddVertex(ref verts, ref vertCount, 0, y + 0, z + 0, west);
                         }
                         // east x+
-                        if (!IsNeighborOpaque(chunkEast, 0, y, z))
+                        if (!IsNeighborOpaque(chunkEast, 0, y, z, p))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
                             AddVertex(ref verts, ref vertCount, size, y + 0, z + 0, east);
@@ -241,7 +254,7 @@ namespace Cubes
                             // IsNeighborOpaque checks in the neighboring chunk when at the edge of this chunk
 
                             // down y-
-                            if (y > 0 ? !IsOpaque(blocks, palette, x, y - 1, z) : !IsNeighborOpaque(chunkDown, x, size - 1, z))
+                            if (y > 0 ? !IsOpaque(blocks, palette, x, y - 1, z) : !IsNeighborOpaque(chunkDown, x, size - 1, z, p))
                             {
                                 AddIndices(ref indices, ref indexCount, vertCount);
                                 AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, down);
@@ -250,7 +263,7 @@ namespace Cubes
                                 AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, down);
                             }
                             // up y+
-                            if (y < size - 1 ? !IsOpaque(blocks, palette, x, y + 1, z) : !IsNeighborOpaque(chunkUp, x, 0, z))
+                            if (y < size - 1 ? !IsOpaque(blocks, palette, x, y + 1, z) : !IsNeighborOpaque(chunkUp, x, 0, z, p))
                             {
                                 AddIndices(ref indices, ref indexCount, vertCount);
                                 AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, up);
@@ -259,7 +272,7 @@ namespace Cubes
                                 AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, up);
                             }
                             // south z-
-                            if (z > 0 ? !IsOpaque(blocks, palette, x, y, z - 1) : !IsNeighborOpaque(chunkSouth, x, y, size - 1))
+                            if (z > 0 ? !IsOpaque(blocks, palette, x, y, z - 1) : !IsNeighborOpaque(chunkSouth, x, y, size - 1, p))
                             {
                                 AddIndices(ref indices, ref indexCount, vertCount);
                                 AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, south);
@@ -268,7 +281,7 @@ namespace Cubes
                                 AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, south);
                             }
                             // north z+
-                            if (z < size - 1 ? !IsOpaque(blocks, palette, x, y, z + 1) : !IsNeighborOpaque(chunkNorth, x, y, 0))
+                            if (z < size - 1 ? !IsOpaque(blocks, palette, x, y, z + 1) : !IsNeighborOpaque(chunkNorth, x, y, 0, p))
                             {
                                 AddIndices(ref indices, ref indexCount, vertCount);
                                 AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, north);
@@ -277,7 +290,7 @@ namespace Cubes
                                 AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, north);
                             }
                             // west x-
-                            if (x > 0 ? !IsOpaque(blocks, palette, x - 1, y, z) : !IsNeighborOpaque(chunkWest, size - 1, y, z))
+                            if (x > 0 ? !IsOpaque(blocks, palette, x - 1, y, z) : !IsNeighborOpaque(chunkWest, size - 1, y, z, p))
                             {
                                 AddIndices(ref indices, ref indexCount, vertCount);
                                 AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, west);
@@ -286,7 +299,7 @@ namespace Cubes
                                 AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, west);
                             }
                             // east x+
-                            if (x < size - 1 ? !IsOpaque(blocks, palette, x + 1, y, z) : !IsNeighborOpaque(chunkEast, 0, y, z))
+                            if (x < size - 1 ? !IsOpaque(blocks, palette, x + 1, y, z) : !IsNeighborOpaque(chunkEast, 0, y, z, p))
                             {
                                 AddIndices(ref indices, ref indexCount, vertCount);
                                 AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, east);

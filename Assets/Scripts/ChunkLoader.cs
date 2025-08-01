@@ -26,6 +26,9 @@ namespace Cubes
         [SerializeField]
         private ComputeShader _procGenShader;
 
+        [SerializeField]
+        private CreateMesh.Params _createMesh = CreateMesh.Params.Default;
+
         private bool _isDirty;
 
         private struct LoadedChunk
@@ -81,7 +84,7 @@ namespace Cubes
                 if (isActiveAndEnabled && _isDirty)
                     Load();
 
-                await Awaitable.WaitForSecondsAsync(0.1f);
+                await Awaitable.WaitForSecondsAsync(0.02f);
             }
         }
 
@@ -264,7 +267,7 @@ namespace Cubes
         {
             using (new TimerScope("mesh", timers))
             {
-                CreateMesh.Run(chunk.chunk, ChunkMap, ref createMesh);
+                CreateMesh.Run(chunk.chunk, ChunkMap, ref createMesh, _createMesh);
             }
 
             Mesh.MeshDataArray dataArray = default;
