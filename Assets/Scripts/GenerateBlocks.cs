@@ -22,7 +22,8 @@ namespace Cubes
             SimplexNoise2D,
             PerlinNoise2D,
             SimplexNoise3D,
-            PerlinNoise3D
+            PerlinNoise3D,
+            CustomTerrain,
         }
 
         [Serializable]

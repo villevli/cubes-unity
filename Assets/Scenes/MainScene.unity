@@ -665,7 +665,7 @@ MonoBehaviour:
   _viewDistance: 8
   _chunkPrefab: {fileID: 1146201384}
   _generator:
-    Type: 5
+    Type: 6
     Offset:
       x: 0
       y: 0

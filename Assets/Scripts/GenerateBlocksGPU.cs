@@ -47,6 +47,8 @@ namespace Cubes
                 return "ProcGenPerlin3D";
             if (p.Type == GenerateBlocks.Type.SimplexNoise3D)
                 return "ProcGenSimplex3D";
+            if (p.Type == GenerateBlocks.Type.CustomTerrain)
+                return "ProcGenCustomTerrain";
             return null;
         }
 
@@ -130,7 +132,7 @@ namespace Cubes
                     }
                 }
 
-                int blockStateCount = hasMultipleBlockStates ? 2 : 1;
+                int blockStateCount = hasMultipleBlockStates ? 3 : 1;
 
                 if (!chunk.Palette.IsCreated || chunk.Palette.Length != blockStateCount)
                 {
@@ -140,8 +142,9 @@ namespace Cubes
 
                 if (blockStateCount > 1)
                 {
-                    chunk.Palette[0] = BlockType.Air;
-                    chunk.Palette[1] = BlockType.Stone;
+                    chunk.Palette[0] = 0;
+                    chunk.Palette[1] = 1;
+                    chunk.Palette[2] = 2;
 
                     if (!chunk.Blocks.IsCreated)
                     {
@@ -151,7 +154,7 @@ namespace Cubes
                 }
                 else
                 {
-                    chunk.Palette[0] = blockType == 0 ? BlockType.Air : BlockType.Stone;
+                    chunk.Palette[0] = blockType;
 
                     chunk.Blocks.Dispose();
                     chunk.Blocks = default;

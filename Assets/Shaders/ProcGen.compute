@@ -1,5 +1,6 @@
 #pragma kernel ProcGenPerlin3D
 #pragma kernel ProcGenSimplex3D
+#pragma kernel ProcGenCustomTerrain
 
 #include "ClassicNoise.hlsl"
 #include "SimplexNoise.hlsl"
@@ -75,6 +76,91 @@ void ProcGenSimplex3D(uint3 id : SV_DispatchThreadID)
         val = val - xyz.y;
 
         result |= (val > 0 ? 1 : 0) << (i * 8);
+    }
+
+    Result[resultIndex] = result;
+}
+
+float fractal_cnoise(float3 p, int octaves, float freq, float amplitude)
+{
+    float val = 0;
+    for (int o = 0; o < octaves; o++)
+    {
+        val += cnoise(p * freq) * amplitude;
+        freq *= 2;
+        amplitude *= 0.5;
+    }
+    return val;
+}
+
+float fractal_cnoise(float2 p, int octaves, float freq, float amplitude)
+{
+    float val = 0;
+    for (int o = 0; o < octaves; o++)
+    {
+        val += cnoise(p * freq) * amplitude;
+        freq *= 2;
+        amplitude *= 0.5;
+    }
+    return val;
+}
+
+[numthreads(1,16,64)]
+void ProcGenCustomTerrain(uint3 id : SV_DispatchThreadID)
+{
+    uint chunkIndex = id.x;
+    int y = id.y;
+    int z = id.z / 4;
+    int x = id.z % 4;
+
+    int3 chunkMin = ChunkMinBuf[chunkIndex];
+
+    uint resultIndex = chunkIndex * 16 * 16 * 4 + y * 16 * 4 + z * 4 + x;
+
+    // Calculate value for 4 blocks along the x axis and pack into the int
+    int result = 0;
+
+    for (int i = 0; i < 4; i++)
+    {
+        float3 xyz = int3(x * 4 + i, y, z) + chunkMin;
+
+        int block = 0;
+
+        // Global offset and scale
+        xyz = (xyz - Offset.xyz) * Scale.xyz;
+
+        float surface = 0;
+
+        // Plane
+        surface = -xyz.y;
+
+        // Surface height (2D noise)
+        surface += fractal_cnoise(xyz.xz, 4, 0.007, 15);
+
+        // TODO: Rivers (2D noise)
+        // float rivers = abs(fractal_cnoise(xyz.xz * 0.01 + float2(0, 100), 3, 1, 1));
+        // rivers = saturate(saturate(rivers * 8 - 0.2));
+        // surface += rivers * 5;
+
+        if (surface > 4) // deeper
+            block = 1;
+        else if (surface > 0) // surface
+            block = 2;
+
+        // Noise caves (3D noise)
+        float3 noisexyz = xyz * float3(0.5, 1.5, 0.5);
+        float noisecaves = fractal_cnoise(noisexyz, 4, 0.025, 1);
+        // Reduce cave size
+        noisecaves += 0.5;
+        // noisecaves = abs(noisecaves) - 0.1;
+        // Replace with air to create caves
+        block *= noisecaves > 0 ? 1 : 0;
+
+        // Subtract a sphere at origin
+        // float ball = 16 - length(xyz);
+        // block *= -ball > 0 ? 1 : 0;
+
+        result |= block << (i * 8);
     }
 
     Result[resultIndex] = result;
