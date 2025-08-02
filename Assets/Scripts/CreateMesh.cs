@@ -24,6 +24,7 @@ namespace Cubes
         {
             public byte4 position;
             public sbyte4 normal;
+            public float2 uv;
         }
 
         private struct byte4
@@ -74,7 +75,7 @@ namespace Cubes
         }
 
         [BurstCompile]
-        public static void Run(in Chunk chunk, in NativeParallelHashMap<int3, Chunk> chunks, ref CreateMesh buffers, in Params p)
+        public static void Run(in Chunk chunk, in NativeParallelHashMap<int3, Chunk> chunks, in NativeArray<BlockType> blockTypes, ref CreateMesh buffers, in Params p)
         {
             var verts = buffers.VertexBuffer;
             var indices = buffers.IndexBuffer;
@@ -119,7 +120,20 @@ namespace Cubes
                 indices[count++] = (ushort)(vi + 0);
             }
 
-            static void AddVertex(ref NativeArray<Vertex> verts, ref int count, int x, int y, int z, in sbyte4 normal)
+            static float2 GetUV(in BlockType type, int corner)
+            {
+                var uvr = type.TexAtlasRect;
+                return corner switch
+                {
+                    0 => uvr.min,
+                    1 => new(uvr.xMin, uvr.yMax),
+                    2 => uvr.max,
+                    3 => new(uvr.xMax, uvr.yMin),
+                    _ => 0,
+                };
+            }
+
+            static void AddVertex(ref NativeArray<Vertex> verts, ref int count, int x, int y, int z, int corner, in BlockType type, in sbyte4 normal)
             {
                 verts[count++] = new()
                 {
@@ -129,7 +143,8 @@ namespace Cubes
                         (byte)(z * (128 / size))
                     // TODO: pack the normal in the w byte, use custom shader
                     ),
-                    normal = normal
+                    normal = normal,
+                    uv = GetUV(type, corner)
                 };
             }
 
@@ -157,8 +172,12 @@ namespace Cubes
                 return IsOpaque(chunk.Blocks, chunk.Palette, x, y, z);
             }
 
+            var types = blockTypes.AsReadOnlySpan();
+
             if (chunk.Palette.Length == 1)
             {
+                BlockType type = types[chunk.Palette[0]];
+
                 // Iterate only the edges of the chunk when the chunk has only one block type
                 for (int z = 0; z < size; z++)
                 {
@@ -168,19 +187,19 @@ namespace Cubes
                         if (!IsNeighborOpaque(chunkDown, x, size - 1, z, p))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
-                            AddVertex(ref verts, ref vertCount, x + 0, 0, z + 0, down);
-                            AddVertex(ref verts, ref vertCount, x + 1, 0, z + 0, down);
-                            AddVertex(ref verts, ref vertCount, x + 1, 0, z + 1, down);
-                            AddVertex(ref verts, ref vertCount, x + 0, 0, z + 1, down);
+                            AddVertex(ref verts, ref vertCount, x + 0, 0, z + 0, 0, type, down);
+                            AddVertex(ref verts, ref vertCount, x + 1, 0, z + 0, 1, type, down);
+                            AddVertex(ref verts, ref vertCount, x + 1, 0, z + 1, 2, type, down);
+                            AddVertex(ref verts, ref vertCount, x + 0, 0, z + 1, 3, type, down);
                         }
                         // up y+
                         if (!IsNeighborOpaque(chunkUp, x, 0, z, p))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
-                            AddVertex(ref verts, ref vertCount, x + 0, size, z + 0, up);
-                            AddVertex(ref verts, ref vertCount, x + 0, size, z + 1, up);
-                            AddVertex(ref verts, ref vertCount, x + 1, size, z + 1, up);
-                            AddVertex(ref verts, ref vertCount, x + 1, size, z + 0, up);
+                            AddVertex(ref verts, ref vertCount, x + 0, size, z + 0, 0, type, up);
+                            AddVertex(ref verts, ref vertCount, x + 0, size, z + 1, 1, type, up);
+                            AddVertex(ref verts, ref vertCount, x + 1, size, z + 1, 2, type, up);
+                            AddVertex(ref verts, ref vertCount, x + 1, size, z + 0, 3, type, up);
                         }
                     }
                 }
@@ -193,19 +212,19 @@ namespace Cubes
                         if (!IsNeighborOpaque(chunkSouth, x, y, size - 1, p))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, 0, south);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, 0, south);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 1, 0, south);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, 0, south);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, 0, 0, type, south);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, 0, 1, type, south);
+                            AddVertex(ref verts, ref vertCount, x + 1, y + 1, 0, 2, type, south);
+                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, 0, 3, type, south);
                         }
                         // north z+
                         if (!IsNeighborOpaque(chunkNorth, x, y, 0, p))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, size, north);
-                            AddVertex(ref verts, ref vertCount, x + 1, y + 1, size, north);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, size, north);
-                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, size, north);
+                            AddVertex(ref verts, ref vertCount, x + 1, y + 0, size, 0, type, north);
+                            AddVertex(ref verts, ref vertCount, x + 1, y + 1, size, 1, type, north);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 1, size, 2, type, north);
+                            AddVertex(ref verts, ref vertCount, x + 0, y + 0, size, 3, type, north);
                         }
                     }
                 }
@@ -218,19 +237,19 @@ namespace Cubes
                         if (!IsNeighborOpaque(chunkWest, size - 1, y, z, p))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
-                            AddVertex(ref verts, ref vertCount, 0, y + 0, z + 1, west);
-                            AddVertex(ref verts, ref vertCount, 0, y + 1, z + 1, west);
-                            AddVertex(ref verts, ref vertCount, 0, y + 1, z + 0, west);
-                            AddVertex(ref verts, ref vertCount, 0, y + 0, z + 0, west);
+                            AddVertex(ref verts, ref vertCount, 0, y + 0, z + 1, 0, type, west);
+                            AddVertex(ref verts, ref vertCount, 0, y + 1, z + 1, 1, type, west);
+                            AddVertex(ref verts, ref vertCount, 0, y + 1, z + 0, 2, type, west);
+                            AddVertex(ref verts, ref vertCount, 0, y + 0, z + 0, 3, type, west);
                         }
                         // east x+
                         if (!IsNeighborOpaque(chunkEast, 0, y, z, p))
                         {
                             AddIndices(ref indices, ref indexCount, vertCount);
-                            AddVertex(ref verts, ref vertCount, size, y + 0, z + 0, east);
-                            AddVertex(ref verts, ref vertCount, size, y + 1, z + 0, east);
-                            AddVertex(ref verts, ref vertCount, size, y + 1, z + 1, east);
-                            AddVertex(ref verts, ref vertCount, size, y + 0, z + 1, east);
+                            AddVertex(ref verts, ref vertCount, size, y + 0, z + 0, 0, type, east);
+                            AddVertex(ref verts, ref vertCount, size, y + 1, z + 0, 1, type, east);
+                            AddVertex(ref verts, ref vertCount, size, y + 1, z + 1, 2, type, east);
+                            AddVertex(ref verts, ref vertCount, size, y + 0, z + 1, 3, type, east);
                         }
                     }
                 }
@@ -250,6 +269,8 @@ namespace Cubes
                             if (block == BlockType.Air)
                                 continue;
 
+                            BlockType type = types[block];
+
                             // Only add faces where the neighboring block is transparent
                             // IsNeighborOpaque checks in the neighboring chunk when at the edge of this chunk
 
@@ -257,55 +278,55 @@ namespace Cubes
                             if (y > 0 ? !IsOpaque(blocks, palette, x, y - 1, z) : !IsNeighborOpaque(chunkDown, x, size - 1, z, p))
                             {
                                 AddIndices(ref indices, ref indexCount, vertCount);
-                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, down);
-                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, down);
-                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, down);
-                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, down);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, 0, type, down);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, 1, type, down);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, 2, type, down);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, 3, type, down);
                             }
                             // up y+
                             if (y < size - 1 ? !IsOpaque(blocks, palette, x, y + 1, z) : !IsNeighborOpaque(chunkUp, x, 0, z, p))
                             {
                                 AddIndices(ref indices, ref indexCount, vertCount);
-                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, up);
-                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 1, up);
-                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 1, up);
-                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, up);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, 0, type, up);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 1, 1, type, up);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 1, 2, type, up);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, 3, type, up);
                             }
                             // south z-
                             if (z > 0 ? !IsOpaque(blocks, palette, x, y, z - 1) : !IsNeighborOpaque(chunkSouth, x, y, size - 1, p))
                             {
                                 AddIndices(ref indices, ref indexCount, vertCount);
-                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, south);
-                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, south);
-                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, south);
-                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, south);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, 0, type, south);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, 1, type, south);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, 2, type, south);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, 3, type, south);
                             }
                             // north z+
                             if (z < size - 1 ? !IsOpaque(blocks, palette, x, y, z + 1) : !IsNeighborOpaque(chunkNorth, x, y, 0, p))
                             {
                                 AddIndices(ref indices, ref indexCount, vertCount);
-                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, north);
-                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 1, north);
-                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 1, north);
-                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, north);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, 0, type, north);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 1, 1, type, north);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 1, 2, type, north);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, 3, type, north);
                             }
                             // west x-
                             if (x > 0 ? !IsOpaque(blocks, palette, x - 1, y, z) : !IsNeighborOpaque(chunkWest, size - 1, y, z, p))
                             {
                                 AddIndices(ref indices, ref indexCount, vertCount);
-                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, west);
-                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 1, west);
-                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, west);
-                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, west);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 1, 0, type, west);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 1, 1, type, west);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 1, z + 0, 2, type, west);
+                                AddVertex(ref verts, ref vertCount, x + 0, y + 0, z + 0, 3, type, west);
                             }
                             // east x+
                             if (x < size - 1 ? !IsOpaque(blocks, palette, x + 1, y, z) : !IsNeighborOpaque(chunkEast, 0, y, z, p))
                             {
                                 AddIndices(ref indices, ref indexCount, vertCount);
-                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, east);
-                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, east);
-                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 1, east);
-                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, east);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 0, 0, type, east);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 0, 1, type, east);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 1, z + 1, 2, type, east);
+                                AddVertex(ref verts, ref vertCount, x + 1, y + 0, z + 1, 3, type, east);
                             }
                         }
                     }
@@ -319,9 +340,10 @@ namespace Cubes
         [BurstCompile]
         public static void SetMeshData(in CreateMesh buffers, ref Mesh.MeshData meshData)
         {
-            var vbp = new NativeArray<VertexAttributeDescriptor>(2, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
+            var vbp = new NativeArray<VertexAttributeDescriptor>(3, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
             vbp[0] = new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.UNorm8, 4);
             vbp[1] = new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.SNorm8, 4);
+            vbp[2] = new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2);
             meshData.SetVertexBufferParams(buffers.VertexCount, vbp);
 
             var pos = meshData.GetVertexData<Vertex>();

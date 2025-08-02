@@ -29,7 +29,14 @@ namespace Cubes
         [SerializeField]
         private CreateMesh.Params _createMesh = CreateMesh.Params.Default;
 
-        private bool _isDirty;
+        // TODO: Support separate texture per cube side for each block type
+        [SerializeField]
+        private Texture2D[] _blockTextures = { null, null };
+
+        private Texture2D Atlas;
+        private Material AtlasMaterial;
+
+        private NativeArray<BlockType> BlockTypes;
 
         private struct LoadedChunk
         {
@@ -40,6 +47,8 @@ namespace Cubes
 
         private List<LoadedChunk> Chunks = new();
         private NativeParallelHashMap<int3, Chunk> ChunkMap;
+
+        private bool _isDirty;
 
         private void OnEnable()
         {
@@ -92,6 +101,11 @@ namespace Cubes
         {
             TimerResults timers = new();
             var totalTime = new TimerScope("total", null);
+
+            if (Atlas == null)
+            {
+                CreateBlockTypesAtlas();
+            }
 
             GenerateBlocks generateBlocks;
             GenerateBlocksGPU generateBlocksGPU;
@@ -166,6 +180,34 @@ namespace Cubes
             }
             Chunks.Clear();
             ChunkMap.Dispose();
+
+            DestroyImmediate(Atlas);
+            BlockTypes.Dispose();
+        }
+
+        private void CreateBlockTypesAtlas()
+        {
+            // Fit max 256x256 of 16x16 textures
+            var atlas = new Texture2D(16 * 256, 16 * 256, TextureFormat.RGBA32, false)
+            {
+                filterMode = FilterMode.Point
+            };
+
+            var rects = atlas.PackTextures(_blockTextures, 0, 16 * 256);
+
+            BlockTypes = new(rects.Length, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+            for (int i = 0; i < BlockTypes.Length; i++)
+            {
+                BlockTypes[i] = new()
+                {
+                    TexAtlasRect = rects[i],
+                };
+                // Debug.Log($"Packed {_blockTextures[i]} into {BlockTypes[i].TexAtlasRect}");
+            }
+
+            Atlas = atlas;
+            AtlasMaterial = _chunkPrefab.GetComponent<Renderer>().material;
+            AtlasMaterial.mainTexture = atlas;
         }
 
         private void CreateChunks()
@@ -267,7 +309,7 @@ namespace Cubes
         {
             using (new TimerScope("mesh", timers))
             {
-                CreateMesh.Run(chunk.chunk, ChunkMap, ref createMesh, _createMesh);
+                CreateMesh.Run(chunk.chunk, ChunkMap, BlockTypes, ref createMesh, _createMesh);
             }
 
             Mesh.MeshDataArray dataArray = default;

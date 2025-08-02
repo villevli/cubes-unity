@@ -1,11 +1,15 @@
 using System;
 using Unity.Collections;
 using Unity.Mathematics;
+using UnityEngine;
 
 namespace Cubes
 {
-    public static class BlockType
+    [Serializable]
+    public struct BlockType
     {
+        public Rect TexAtlasRect;
+
         public const int Air = 0;
         public const int Stone = 1;
     }
