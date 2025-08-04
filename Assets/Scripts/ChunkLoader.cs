@@ -109,12 +109,12 @@ namespace Cubes
 
             GenerateBlocks generateBlocks;
             GenerateBlocksGPU generateBlocksGPU;
-            CreateMesh createMesh;
+            CreateMeshPoints createMesh;
             using (new TimerScope("buffers", timers))
             {
                 generateBlocks = new GenerateBlocks(Allocator.Temp);
                 generateBlocksGPU = new GenerateBlocksGPU(Allocator.Temp);
-                createMesh = new CreateMesh(Allocator.Temp);
+                createMesh = new CreateMeshPoints(Allocator.Temp);
             }
 
             using (new TimerScope("create", timers))
@@ -297,7 +297,7 @@ namespace Cubes
             }
         }
 
-        private void CreateChunkMeshes(List<LoadedChunk> chunks, ref CreateMesh createMesh, TimerResults timers)
+        private void CreateChunkMeshes(List<LoadedChunk> chunks, ref CreateMeshPoints createMesh, TimerResults timers)
         {
             for (int i = 0; i < chunks.Count; i++)
             {
@@ -305,11 +305,11 @@ namespace Cubes
             }
         }
 
-        private LoadedChunk CreateChunkMesh(LoadedChunk chunk, ref CreateMesh createMesh, TimerResults timers)
+        private LoadedChunk CreateChunkMesh(LoadedChunk chunk, ref CreateMeshPoints createMesh, TimerResults timers)
         {
             using (new TimerScope("mesh", timers))
             {
-                CreateMesh.Run(chunk.chunk, ChunkMap, BlockTypes, ref createMesh, _createMesh);
+                CreateMeshPoints.Run(chunk.chunk, ChunkMap, BlockTypes, ref createMesh, _createMesh);
             }
 
             Mesh.MeshDataArray dataArray = default;
@@ -320,7 +320,7 @@ namespace Cubes
                 {
                     dataArray = Mesh.AllocateWritableMeshData(1);
                     var meshData = dataArray[0];
-                    CreateMesh.SetMeshData(createMesh, ref meshData);
+                    CreateMeshPoints.SetMeshData(createMesh, ref meshData);
                 }
             }
 
@@ -383,7 +383,7 @@ namespace Cubes
                 if (go is not null)
                 {
                     go.transform.position = (float3)(chunk.chunk.Position * Chunk.Size);
-                    go.transform.localScale = (float3)(Chunk.Size * 255 / 128f);
+                    // go.transform.localScale = (float3)(Chunk.Size * 255 / 128f);
                 }
             }
             using (new TimerScope("filter", timers))
