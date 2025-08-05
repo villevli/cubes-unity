@@ -92,7 +92,7 @@ namespace Cubes
                 shader.SetFloat("Offset2", p.Offset2);
                 shader.SetFloat("Scale2", p.Scale2);
 
-                shader.Dispatch(kernelIndex, chunks.Length, 1, 1);
+                shader.Dispatch(kernelIndex, chunks.Length, 1, 2);
             }
 
             var result = buffers.ResultReadbackBuffer;

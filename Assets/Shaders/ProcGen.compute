@@ -13,7 +13,10 @@ float4 Scale;
 float Offset2;
 float Scale2;
 
-[numthreads(1,16,64)]
+// Should run 64 threads in the z dimension. Had to reduce numthreads to 32 so this shader does not become too large.
+// Use thread groups z value of 2 when dispatching this compute shader.
+
+[numthreads(1,16,32)]
 void ProcGenPerlin3D(uint3 id : SV_DispatchThreadID)
 {
     uint chunkIndex = id.x;
@@ -47,7 +50,7 @@ void ProcGenPerlin3D(uint3 id : SV_DispatchThreadID)
     Result[resultIndex] = result;
 }
 
-[numthreads(1,16,64)]
+[numthreads(1,16,32)]
 void ProcGenSimplex3D(uint3 id : SV_DispatchThreadID)
 {
     uint chunkIndex = id.x;
@@ -105,7 +108,7 @@ float fractal_cnoise(float2 p, int octaves, float freq, float amplitude)
     return val;
 }
 
-[numthreads(1,16,64)]
+[numthreads(1,16,32)]
 void ProcGenCustomTerrain(uint3 id : SV_DispatchThreadID)
 {
     uint chunkIndex = id.x;
