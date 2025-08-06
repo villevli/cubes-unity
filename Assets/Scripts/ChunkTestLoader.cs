@@ -9,7 +9,10 @@ using static System.FormattableString;
 
 namespace Cubes
 {
-    public class ChunkLoader : MonoBehaviour
+    /// <summary>
+    /// Loads a fixed number of chunks around the origin for profiling and testing.
+    /// </summary>
+    public class ChunkTestLoader : MonoBehaviour
     {
         [SerializeField]
         private int _viewDistance = 8;
