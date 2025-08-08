@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine;
@@ -43,11 +44,18 @@ namespace Cubes
         /// </summary>
         public bool IsLoaded => Palette.IsCreated;
 
+        /// <summary>
+        /// Is the chunk waiting to be updated.
+        /// </summary>
+        [MarshalAs(UnmanagedType.U1)]
+        public bool IsPendingUpdate;
+
         public Chunk(int3 position)
         {
             Position = position;
             Blocks = default;
             Palette = default;
+            IsPendingUpdate = false;
         }
 
         public void Dispose()

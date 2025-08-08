@@ -206,7 +206,7 @@ Transform:
   m_GameObject: {fileID: 330585543}
   serializedVersion: 2
   m_LocalRotation: {x: 0.31598538, y: 0.3596048, z: -0.13088542, w: 0.8681629}
-  m_LocalPosition: {x: -180, y: 180, z: -180}
+  m_LocalPosition: {x: 0, y: 16, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -377,6 +377,72 @@ MonoBehaviour:
   m_LightCookieSize: {x: 1, y: 1}
   m_LightCookieOffset: {x: 0, y: 0}
   m_SoftShadowQuality: 1
+--- !u!1 &683345182
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 683345184}
+  - component: {fileID: 683345183}
+  m_Layer: 0
+  m_Name: Loader
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &683345183
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 683345182}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: efea6bd89582cdb439d9b98a06c52768, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _viewDistance: 8
+  _generatorOptions:
+    Type: 6
+    Offset:
+      x: 0
+      y: 0
+      z: 0
+    Scale:
+      x: 1
+      y: 1
+      z: 1
+    Offset2: 0
+    Scale2: 1
+  _useGPUCompute: 1
+  _procGenShader: {fileID: 7200000, guid: 95e5007b9dc2d324c83f8edba516f11d, type: 3}
+  _createMeshOptions:
+    AddBorderWalls: 0
+  _blockTextures:
+  - {fileID: 0}
+  - {fileID: 2800000, guid: 67fd97e92db535a4197cd8dc994edccd, type: 3}
+  - {fileID: 2800000, guid: f339efd58a6e84643ad4ca2a868dad48, type: 3}
+  _chunkPrefab: {fileID: 1146201384}
+--- !u!4 &683345184
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 683345182}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &700888744
 GameObject:
   m_ObjectHideFlags: 0
@@ -649,7 +715,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &1484643607
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -709,4 +775,5 @@ SceneRoots:
   - {fileID: 700888747}
   - {fileID: 832575519}
   - {fileID: 1484643608}
+  - {fileID: 683345184}
   - {fileID: 1146201388}

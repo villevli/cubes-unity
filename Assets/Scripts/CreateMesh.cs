@@ -74,6 +74,11 @@ namespace Cubes
             IndexBuffer.Dispose();
         }
 
+        public static bool NeedsMesh(in Chunk chunk)
+        {
+            return chunk.Palette.Length > 0 && (chunk.Palette.Length != 1 || chunk.Palette[0] != BlockType.Air);
+        }
+
         [BurstCompile]
         public static void Run(in Chunk chunk, in NativeParallelHashMap<int3, Chunk> chunks, in NativeArray<BlockType> blockTypes, ref CreateMesh buffers, in Params p)
         {
@@ -82,7 +87,7 @@ namespace Cubes
             int vertCount = 0;
             int indexCount = 0;
 
-            if (chunk.Palette.Length == 0 || (chunk.Palette.Length == 1 && chunk.Palette[0] == BlockType.Air))
+            if (!NeedsMesh(chunk))
             {
                 buffers.VertexCount = vertCount;
                 buffers.IndexCount = indexCount;
@@ -340,11 +345,12 @@ namespace Cubes
         [BurstCompile]
         public static void SetMeshData(in CreateMesh buffers, ref Mesh.MeshData meshData)
         {
-            var vbp = new NativeArray<VertexAttributeDescriptor>(3, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
+            var vbp = new NativeArray<VertexAttributeDescriptor>(3, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
             vbp[0] = new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.UNorm8, 4);
             vbp[1] = new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.SNorm8, 4);
             vbp[2] = new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2);
             meshData.SetVertexBufferParams(buffers.VertexCount, vbp);
+            vbp.Dispose();
 
             var pos = meshData.GetVertexData<Vertex>();
             buffers.VertexBuffer.GetSubArray(0, buffers.VertexCount).CopyTo(pos);

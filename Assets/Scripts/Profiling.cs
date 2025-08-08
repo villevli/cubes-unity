@@ -59,7 +59,7 @@ namespace Cubes
 
         public void Dispose()
         {
-            results.Add(new()
+            results?.Add(new()
             {
                 Name = name,
                 Elapsed = TimeSpan.FromTicks(Stopwatch.GetTimestamp() - timestamp)

@@ -16,7 +16,7 @@ namespace Cubes
     {
         const int size = Chunk.Size;
 
-        private const int MaxChunksPerDispatch = 4096;
+        public const int MaxChunksPerDispatch = 4096;
         private ComputeBuffer ChunkMinCBuffer;
         private ComputeBuffer ResultCBuffer;
         private NativeArray<int> ResultReadbackBuffer;
@@ -68,44 +68,53 @@ namespace Cubes
 
         public static void Run(ref NativeArray<Chunk> chunks, ref GenerateBlocksGPU buffers, GenerateBlocks.Params p, ComputeShader shader, TimerResults timers)
         {
-            var chunkMinCBuf = buffers.ChunkMinCBuffer;
-            var resultCBuf = buffers.ResultCBuffer;
+            Dispatch(ref chunks, ref buffers, p, shader, timers);
 
+            using (new TimerScope("readback", timers))
+            {
+                var readback = AsyncGPUReadback.RequestIntoNativeArray(ref buffers.ResultReadbackBuffer, buffers.ResultCBuffer, chunks.Length * size * size * size, 0);
+                readback.WaitForCompletion();
+            }
+
+            using (new TimerScope("copy", timers))
+            {
+                CopyResultToChunks(ref chunks, buffers.ResultReadbackBuffer);
+            }
+        }
+
+        public static async Awaitable RunAsync(NativeArray<Chunk> chunks, GenerateBlocksGPU buffers, GenerateBlocks.Params p, ComputeShader shader)
+        {
+            Dispatch(ref chunks, ref buffers, p, shader, null);
+
+            await AsyncGPUReadback.RequestIntoNativeArrayAsync(ref buffers.ResultReadbackBuffer, buffers.ResultCBuffer, chunks.Length * size * size * size, 0);
+
+            CopyResultToChunks(ref chunks, buffers.ResultReadbackBuffer);
+        }
+
+        public static void Dispatch(ref NativeArray<Chunk> chunks, ref GenerateBlocksGPU buffers, GenerateBlocks.Params p, ComputeShader shader, TimerResults timers)
+        {
             using (new TimerScope("write", timers))
             {
-                var chunkMinDst = chunkMinCBuf.BeginWrite<int3>(0, chunks.Length);
+                var chunkMinDst = buffers.ChunkMinCBuffer.BeginWrite<int3>(0, chunks.Length);
                 for (int i = 0; i < chunks.Length; i++)
                 {
                     chunkMinDst[i] = chunks[i].Position * size;
                 }
-                chunkMinCBuf.EndWrite<int3>(chunks.Length);
+                buffers.ChunkMinCBuffer.EndWrite<int3>(chunks.Length);
             }
 
             using (new TimerScope("dispatch", timers))
             {
                 p = AdjustDefaultParams(p);
                 int kernelIndex = shader.FindKernel(GetKernelName(p));
-                shader.SetBuffer(kernelIndex, "Result", resultCBuf);
-                shader.SetBuffer(kernelIndex, "ChunkMinBuf", chunkMinCBuf);
+                shader.SetBuffer(kernelIndex, "Result", buffers.ResultCBuffer);
+                shader.SetBuffer(kernelIndex, "ChunkMinBuf", buffers.ChunkMinCBuffer);
                 shader.SetVector("Offset", new float4(p.Offset, 0));
                 shader.SetVector("Scale", new float4(p.Scale, 0));
                 shader.SetFloat("Offset2", p.Offset2);
                 shader.SetFloat("Scale2", p.Scale2);
 
                 shader.Dispatch(kernelIndex, chunks.Length, 1, 2);
-            }
-
-            var result = buffers.ResultReadbackBuffer;
-
-            using (new TimerScope("readback", timers))
-            {
-                var readback = AsyncGPUReadback.RequestIntoNativeArray(ref result, resultCBuf, chunks.Length * size * size * size, 0);
-                readback.WaitForCompletion();
-            }
-
-            using (new TimerScope("copy", timers))
-            {
-                CopyResultToChunks(ref chunks, result);
             }
         }
 
