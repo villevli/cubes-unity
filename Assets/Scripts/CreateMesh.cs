@@ -2,6 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using Unity.Burst;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -19,6 +20,9 @@ namespace Cubes
         private NativeArray<ushort> IndexBuffer;
         public int VertexCount;
         public int IndexCount;
+
+        public static readonly int SizeOfVertex = UnsafeUtility.SizeOf<Vertex>();
+        public static readonly int SizeOfIndex = sizeof(ushort);
 
         private struct Vertex
         {

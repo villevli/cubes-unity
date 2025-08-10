@@ -44,15 +44,19 @@ namespace Cubes
         private void Update()
         {
             // Activate input and lock cursor when using mouse + keyboard
-            if (Keyboard.current.escapeKey.wasPressedThisFrame)
+            if (Keyboard.current?.escapeKey.wasPressedThisFrame ?? false)
             {
-                _inputActive = false;
+                _inputActive = !_inputActive;
             }
-            else if (Mouse.current.press.wasPressedThisFrame)
+            if (Mouse.current?.press.wasReleasedThisFrame ?? false)
             {
                 _inputActive = true;
             }
-            Cursor.lockState = _inputActive ? CursorLockMode.Locked : CursorLockMode.None;
+
+            if (Touchscreen.current == null)
+            {
+                Cursor.lockState = _inputActive ? CursorLockMode.Locked : CursorLockMode.None;
+            }
 
             if (!_inputActive)
                 return;

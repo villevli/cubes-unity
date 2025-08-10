@@ -50,6 +50,12 @@ namespace Cubes
 
         private int3 _lastChunkPos = int.MinValue;
 
+        public int TrackedChunkCount => _chunkMap.Count();
+        public int LoadedChunkCount { get; private set; }
+        public long BlocksInMemoryCount { get; private set; }
+        public int MeshCount { get; private set; }
+        public long MeshMemoryUsedBytes { get; private set; }
+
         private void OnEnable()
         {
             // Application.targetFrameRate = 60;
@@ -77,25 +83,13 @@ namespace Cubes
             }
         }
 
-        private void OnGUI()
-        {
-            if (GUILayout.Button("Unload"))
-            {
-                Unload();
-            }
-            // if (GUILayout.Button("Load"))
-            // {
-            //     Load();
-            // }
-        }
-
         private void Init()
         {
             CreateBlockTypesAtlas();
 
             _chunkMap = new(1024, Allocator.Persistent);
 
-            _cts = new();
+            _cts ??= new();
         }
 
         private void Deinit()
@@ -108,10 +102,11 @@ namespace Cubes
             _blockTypes.Dispose();
         }
 
-        private void Unload()
+        public void Unload()
         {
             _cts.Cancel();
             _cts.Dispose();
+            _cts = new();
 
             foreach (var kv in _renderedChunks)
             {
@@ -126,6 +121,9 @@ namespace Cubes
                 item.Value.Dispose();
             }
             _chunkMap.Clear();
+            LoadedChunkCount = 0;
+            BlocksInMemoryCount = 0;
+
             _lastChunkPos = int.MinValue;
         }
 
@@ -209,6 +207,9 @@ namespace Cubes
                     chunk.IsPendingUpdate = false;
                     _chunkMap[chunk.Position] = chunk;
                     loadingChunks[i] = chunk;
+
+                    LoadedChunkCount += chunk.IsLoaded ? 1 : 0;
+                    BlocksInMemoryCount += chunk.Blocks.Length;
                 }
 
                 CreateChunkMeshes(loadingChunks, cancellationToken);
@@ -327,6 +328,12 @@ namespace Cubes
 
             Mesh mesh = rchunk.mesh;
 
+            if (mesh is not null)
+            {
+                MeshCount--;
+                MeshMemoryUsedBytes -= GetSizeOfMesh(mesh);
+            }
+
             if (!needsMesh)
             {
                 DestroyImmediate(mesh);
@@ -344,6 +351,9 @@ namespace Cubes
                 Mesh.ApplyAndDisposeWritableMeshData(dataArray, mesh, MeshUpdateFlags.DontRecalculateBounds | MeshUpdateFlags.DontValidateIndices);
 
                 mesh.bounds = mesh.GetSubMesh(0).bounds;
+
+                MeshCount++;
+                MeshMemoryUsedBytes += GetSizeOfMesh(mesh);
             }
 
             GameObject go = rchunk.go;
@@ -368,6 +378,13 @@ namespace Cubes
             }
 
             _renderedChunks[chunk.Position] = rchunk;
+        }
+
+        private static long GetSizeOfMesh(Mesh mesh)
+        {
+            return mesh is null ? 0 :
+                   mesh.vertexCount * CreateMesh.SizeOfVertex
+                 + mesh.GetIndexCount(0) * CreateMesh.SizeOfIndex;
         }
     }
 }
