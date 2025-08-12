@@ -99,9 +99,14 @@ namespace Cubes
             Label(Invariant($"Tris: {_renderTrianglesRecorder.LastValue / 1000f:F1}k"));
             Label(Invariant($"System Memory: {BytesToMB(_systemMemoryRecorder.LastValue)}"));
 
-            GUI.backgroundColor = Color.white;
             GUILayout.FlexibleSpace();
 
+            Label(Invariant($"Last Loaded: {_chunkLoader.LastChunksLoadedCount}"));
+            Label(Invariant($"Last Rendered: {_chunkLoader.LastChunksRenderedCount}"));
+            Label(Invariant($"Last Update: {_chunkLoader.LastChunkUpdateDurationMs:F2} ms"));
+            GUILayout.Space(10);
+
+            GUI.backgroundColor = Color.white;
             Buttons();
 
             GUILayout.Space(10);

@@ -3,6 +3,7 @@ using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine;
+using UnityEngine.Profiling;
 using UnityEngine.Rendering;
 
 namespace Cubes
@@ -84,11 +85,15 @@ namespace Cubes
 
         public static async Awaitable RunAsync(NativeArray<Chunk> chunks, GenerateBlocksGPU buffers, GenerateBlocks.Params p, ComputeShader shader)
         {
+            Profiler.BeginSample("Dispatch");
             Dispatch(ref chunks, ref buffers, p, shader, null);
+            Profiler.EndSample();
 
             await AsyncGPUReadback.RequestIntoNativeArrayAsync(ref buffers.ResultReadbackBuffer, buffers.ResultCBuffer, chunks.Length * size * size * size, 0);
 
+            Profiler.BeginSample("CopyResultToChunks");
             CopyResultToChunks(ref chunks, buffers.ResultReadbackBuffer);
+            Profiler.EndSample();
         }
 
         public static void Dispatch(ref NativeArray<Chunk> chunks, ref GenerateBlocksGPU buffers, GenerateBlocks.Params p, ComputeShader shader, TimerResults timers)
