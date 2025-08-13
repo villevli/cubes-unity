@@ -65,8 +65,6 @@ namespace Cubes
 
         private void OnEnable()
         {
-            // Application.targetFrameRate = 60;
-
             Init();
         }
 
@@ -240,10 +238,8 @@ namespace Cubes
                 }
                 Profiler.EndSample();
 
-                Profiler.BeginSample("CreateChunkMeshes");
                 var chunksToRender = chunksToRenderBuf.GetSubArray(0, chunksToRenderCount);
-                CreateChunkMeshes(chunksToRender, cancellationToken);
-                Profiler.EndSample();
+                await CreateChunkMeshesBatchedAsync(chunksToRender, cancellationToken);
             }
 
             chunksToLoadBuf.Dispose();
@@ -305,45 +301,80 @@ namespace Cubes
             }
         }
 
-        private void CreateChunkMeshes(NativeArray<Chunk> chunks, CancellationToken cancellationToken)
+        // Each batch can potentially use a different background thread to speed up the process
+        private async Awaitable CreateChunkMeshesBatchedAsync(NativeArray<Chunk> chunks, CancellationToken cancellationToken)
         {
-            for (int i = 0; i < chunks.Length; i++)
+            Profiler.BeginSample("CreateChunkMeshes");
+            int batchSize = chunks.Length / 8;
+            var processed = 0;
+            var tasks = new List<Awaitable>();
+            while (!cancellationToken.IsCancellationRequested && processed < chunks.Length)
             {
-                CreateChunkMesh(chunks[i], cancellationToken);
+                var batch = chunks.GetSubArray(processed, math.min(chunks.Length - processed, batchSize));
+                tasks.Add(CreateChunkMeshesAsync(batch, cancellationToken));
+                processed += batch.Length;
+            }
+            Profiler.EndSample();
+            foreach (var task in tasks)
+            {
+                await task;
             }
         }
 
-        private async void CreateChunkMesh(Chunk chunk, CancellationToken cancellationToken) => await CreateChunkMeshAsync(chunk, cancellationToken);
-
-        private async Awaitable CreateChunkMeshAsync(Chunk chunk, CancellationToken cancellationToken)
+        private async Awaitable CreateChunkMeshesAsync(NativeArray<Chunk> chunks, CancellationToken cancellationToken)
         {
             Mesh.MeshDataArray dataArray = default;
-            bool needsMesh = false;
 
-            if (CreateMesh.NeedsMesh(chunk))
+            NativeArray<Chunk> meshChunksBuf = new(chunks.Length, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+            int meshCount = 0;
+
+            for (int i = 0; i < chunks.Length; i++)
             {
-                dataArray = Mesh.AllocateWritableMeshData(1);
+                if (CreateMesh.NeedsMesh(chunks[i]))
+                {
+                    meshChunksBuf[meshCount++] = chunks[i];
+                }
+                else
+                {
+                    // Release possible existing mesh
+                    if (_renderedChunks.TryGetValue(chunks[i].Position, out var rchunk) && rchunk.mesh is not null)
+                    {
+                        MeshCount--;
+                        MeshMemoryUsedBytes -= GetSizeOfMesh(rchunk.mesh);
 
-                // TODO: Process multiple chunks instead of separate background task for every chunk
+                        DestroyImmediate(rchunk.mesh);
+                        rchunk.mesh = null;
+                        _renderedChunks[chunks[i].Position] = rchunk;
+                    }
+                }
+            }
+
+            var meshChunks = meshChunksBuf.GetSubArray(0, meshCount);
+
+            if (meshChunks.Length > 0)
+            {
+                dataArray = Mesh.AllocateWritableMeshData(meshChunks.Length);
 
                 await Awaitable.BackgroundThreadAsync();
                 if (cancellationToken.IsCancellationRequested)
                 {
                     dataArray.Dispose();
+                    meshChunksBuf.Dispose();
                     return;
                 }
 
                 Profiler.BeginSample("CreateMesh");
                 var buffers = new CreateMesh(Allocator.TempJob);
 
-                CreateMesh.Run(chunk, _chunkMap, _blockTypes, ref buffers, _createMeshOptions);
-
-                needsMesh = buffers.VertexCount > 0;
-
-                if (needsMesh)
+                for (int i = 0; i < meshChunks.Length; i++)
                 {
-                    var meshData = dataArray[0];
-                    CreateMesh.SetMeshData(buffers, ref meshData);
+                    CreateMesh.Run(meshChunks[i], _chunkMap, _blockTypes, ref buffers, _createMeshOptions);
+
+                    if (buffers.VertexCount > 0)
+                    {
+                        var meshData = dataArray[i];
+                        CreateMesh.SetMeshData(buffers, ref meshData);
+                    }
                 }
 
                 buffers.Dispose();
@@ -353,71 +384,102 @@ namespace Cubes
                 if (cancellationToken.IsCancellationRequested)
                 {
                     dataArray.Dispose();
+                    meshChunksBuf.Dispose();
                     return;
                 }
-
-                if (!needsMesh)
-                {
-                    dataArray.Dispose();
-                }
             }
+
+            var meshes = new Mesh[meshChunks.Length];
 
             Profiler.BeginSample("ApplyMesh");
-            if (!_renderedChunks.TryGetValue(chunk.Position, out var rchunk))
-                rchunk = new();
-
-            Mesh mesh = rchunk.mesh;
-
-            if (mesh is not null)
+            for (int i = 0; i < meshChunks.Length; i++)
             {
-                MeshCount--;
-                MeshMemoryUsedBytes -= GetSizeOfMesh(mesh);
-            }
+                var chunk = meshChunks[i];
 
-            if (!needsMesh)
+                if (!_renderedChunks.TryGetValue(chunk.Position, out var rchunk))
+                    rchunk = new();
+
+                Mesh mesh = rchunk.mesh;
+
+                if (mesh is not null)
+                {
+                    MeshCount--;
+                    MeshMemoryUsedBytes -= GetSizeOfMesh(mesh);
+                }
+
+                if (mesh == null)
+                {
+                    Profiler.BeginSample("NewMesh");
+                    mesh = new();
+                    mesh.name = "Chunk";
+                    Profiler.EndSample();
+                }
+                rchunk.mesh = mesh;
+                meshes[i] = mesh;
+                _renderedChunks[chunk.Position] = rchunk;
+            }
+            meshChunksBuf.Dispose();
+
+            if (meshes.Length > 0)
             {
-                DestroyImmediate(mesh);
-                mesh = null;
+                Profiler.BeginSample("ApplyAndDisposeWritableMeshData");
+                Mesh.ApplyAndDisposeWritableMeshData(dataArray, meshes, MeshUpdateFlags.DontRecalculateBounds | MeshUpdateFlags.DontValidateIndices);
+                Profiler.EndSample();
             }
-            else if (mesh == null)
+            Profiler.EndSample();
+
+            Profiler.BeginSample("ApplyGameObject");
+            for (int i = 0; i < chunks.Length; i++)
             {
-                mesh = new();
-                mesh.name = "Chunk";
+                var chunk = chunks[i];
+
+                if (!_renderedChunks.TryGetValue(chunk.Position, out var rchunk))
+                    rchunk = new();
+
+                GameObject go = rchunk.go;
+
+                if (rchunk.mesh?.vertexCount == 0)
+                {
+                    DestroyImmediate(rchunk.mesh);
+                    rchunk.mesh = null;
+                }
+
+                if (rchunk.mesh is null)
+                {
+                    DestroyImmediate(go);
+                    go = null;
+                }
+                else
+                {
+                    rchunk.mesh.bounds = rchunk.mesh.GetSubMesh(0).bounds;
+
+                    MeshCount++;
+                    MeshMemoryUsedBytes += GetSizeOfMesh(rchunk.mesh);
+
+                    if (go == null)
+                    {
+                        Profiler.BeginSample("InstantiatePrefab");
+                        go = Instantiate(_chunkPrefab);
+                        Profiler.EndSample();
+
+                        Profiler.BeginSample("SetChunkName");
+                        go.name = "Chunk" + chunk;
+                        Profiler.EndSample();
+                    }
+                }
+                rchunk.go = go;
+
+                if (go is not null)
+                {
+                    Profiler.BeginSample("SetMeshTransform");
+                    go.transform.position = (float3)(chunk.Position * Chunk.Size);
+                    go.transform.localScale = (float3)(Chunk.Size * 255 / 128f);
+                    go.GetComponent<MeshFilter>().mesh = rchunk.mesh;
+                    Profiler.EndSample();
+                }
+
+                _renderedChunks[chunk.Position] = rchunk;
             }
-            rchunk.mesh = mesh;
-
-            if (mesh is not null)
-            {
-                Mesh.ApplyAndDisposeWritableMeshData(dataArray, mesh, MeshUpdateFlags.DontRecalculateBounds | MeshUpdateFlags.DontValidateIndices);
-
-                mesh.bounds = mesh.GetSubMesh(0).bounds;
-
-                MeshCount++;
-                MeshMemoryUsedBytes += GetSizeOfMesh(mesh);
-            }
-
-            GameObject go = rchunk.go;
-
-            if (mesh is null)
-            {
-                DestroyImmediate(go);
-                go = null;
-            }
-            else if (go == null)
-            {
-                go = Instantiate(_chunkPrefab);
-                go.name = "Chunk" + chunk;
-            }
-            rchunk.go = go;
-
-            if (go is not null)
-            {
-                go.transform.position = (float3)(chunk.Position * Chunk.Size);
-                go.transform.localScale = (float3)(Chunk.Size * 255 / 128f);
-                go.GetComponent<MeshFilter>().mesh = mesh;
-            }
-
-            _renderedChunks[chunk.Position] = rchunk;
             Profiler.EndSample();
         }
 
