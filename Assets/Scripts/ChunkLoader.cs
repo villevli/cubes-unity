@@ -53,7 +53,7 @@ namespace Cubes
 
         private int3 _lastChunkPos = int.MinValue;
 
-        public int TrackedChunkCount => _chunkMap.Count();
+        public int TrackedChunkCount => _chunkMap.IsCreated ? _chunkMap.Count() : 0;
         public int LoadedChunkCount { get; private set; }
         public long BlocksInMemoryCount { get; private set; }
         public int MeshCount { get; private set; }
@@ -120,6 +120,8 @@ namespace Cubes
                 DestroyImmediate(chunk.go);
             }
             _renderedChunks.Clear();
+            MeshCount = 0;
+            MeshMemoryUsedBytes = 0;
 
             foreach (var item in _chunkMap)
             {
@@ -305,7 +307,7 @@ namespace Cubes
         private async Awaitable CreateChunkMeshesBatchedAsync(NativeArray<Chunk> chunks, CancellationToken cancellationToken)
         {
             Profiler.BeginSample("CreateChunkMeshes");
-            int batchSize = chunks.Length / 8;
+            int batchSize = math.max(8, chunks.Length / 8);
             var processed = 0;
             var tasks = new List<Awaitable>();
             while (!cancellationToken.IsCancellationRequested && processed < chunks.Length)
