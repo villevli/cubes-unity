@@ -174,6 +174,14 @@ namespace Cubes
             // FIXME: Use persistent alloc. There is no guarantee that this will take less than 4 frames
             var chunksToLoadBuf = new NativeArray<Chunk>(maxChunksInView, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
             int chunksToLoadCount = 0;
+            var chunksToRenderBuf = new NativeArray<Chunk>(maxChunksInView * 2, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+            int chunksToRenderCount = 0;
+
+            void CheckNeighbor(int3 p)
+            {
+                if (_chunkMap.TryGetValue(p, out var nChunk) && nChunk.IsLoaded && !nChunk.IsPendingUpdate)
+                    chunksToRenderBuf[chunksToRenderCount++] = nChunk;
+            }
 
             for (int y = -viewDist.y; y < viewDist.y; y++)
             {
@@ -191,13 +199,19 @@ namespace Cubes
                             chunk.IsPendingUpdate = true;
                             _chunkMap[p] = chunk;
                             chunksToLoadBuf[chunksToLoadCount++] = chunk;
+
+                            // Update the mesh of neighboring chunks if they have been loaded already
+                            CheckNeighbor(p + new int3(-1, 0, 0));
+                            CheckNeighbor(p + new int3(1, 0, 0));
+                            CheckNeighbor(p + new int3(0, -1, 0));
+                            CheckNeighbor(p + new int3(0, 1, 0));
+                            CheckNeighbor(p + new int3(0, 0, -1));
+                            CheckNeighbor(p + new int3(0, 0, 1));
                         }
                     }
                 }
             }
             Profiler.EndSample();
-
-            // FIXME: Update the mesh at the edge of neighboring chunks if they have been loaded already
 
             if (chunksToLoadCount > 0)
             {
@@ -208,6 +222,7 @@ namespace Cubes
                 if (cancellationToken.IsCancellationRequested)
                 {
                     chunksToLoadBuf.Dispose();
+                    chunksToRenderBuf.Dispose();
                     return;
                 }
 
@@ -218,6 +233,7 @@ namespace Cubes
                     chunk.IsPendingUpdate = false;
                     _chunkMap[chunk.Position] = chunk;
                     chunksToLoad[i] = chunk;
+                    chunksToRenderBuf[chunksToRenderCount++] = chunk;
 
                     LoadedChunkCount += chunk.IsLoaded ? 1 : 0;
                     BlocksInMemoryCount += chunk.Blocks.Length;
@@ -225,14 +241,16 @@ namespace Cubes
                 Profiler.EndSample();
 
                 Profiler.BeginSample("CreateChunkMeshes");
-                CreateChunkMeshes(chunksToLoad, cancellationToken);
+                var chunksToRender = chunksToRenderBuf.GetSubArray(0, chunksToRenderCount);
+                CreateChunkMeshes(chunksToRender, cancellationToken);
                 Profiler.EndSample();
             }
 
             chunksToLoadBuf.Dispose();
+            chunksToRenderBuf.Dispose();
 
             LastChunksLoadedCount = chunksToLoadCount;
-            LastChunksRenderedCount = chunksToLoadCount;
+            LastChunksRenderedCount = chunksToRenderCount;
             LastChunkUpdateDurationMs = (float)TimeSpan.FromTicks(Stopwatch.GetTimestamp() - startTs).TotalMilliseconds;
         }
 
@@ -294,8 +312,6 @@ namespace Cubes
                 CreateChunkMesh(chunks[i], cancellationToken);
             }
         }
-
-        // TODO: create mesh when a chunk and it's neighbours have completed loading
 
         private async void CreateChunkMesh(Chunk chunk, CancellationToken cancellationToken) => await CreateChunkMeshAsync(chunk, cancellationToken);
 
