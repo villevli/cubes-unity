@@ -172,9 +172,9 @@ namespace Cubes
             // TODO: Unload chunks that are out of range
 
             // FIXME: Use persistent alloc. There is no guarantee that this will take less than 4 frames
-            var chunksToLoadBuf = new NativeArray<Chunk>(maxChunksInView, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+            var chunksToLoadBuf = new NativeArray<Chunk>(maxChunksInView, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
             int chunksToLoadCount = 0;
-            var chunksToRenderBuf = new NativeArray<Chunk>(maxChunksInView * 2, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+            var chunksToRenderBuf = new NativeArray<Chunk>(maxChunksInView * 2, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
             int chunksToRenderCount = 0;
 
             void CheckNeighbor(int3 p)
@@ -266,7 +266,7 @@ namespace Cubes
 
         private async Awaitable GenerateChunksOnGPUAsync(NativeArray<Chunk> chunks, GenerateBlocks.Params p, CancellationToken cancellationToken)
         {
-            var buffers = new GenerateBlocksGPU(Allocator.TempJob);
+            var buffers = new GenerateBlocksGPU(Allocator.Persistent);
             int generated = 0;
             while (!cancellationToken.IsCancellationRequested && generated < chunks.Length)
             {
@@ -287,7 +287,7 @@ namespace Cubes
             if (cancellationToken.IsCancellationRequested)
                 return;
 
-            var buffers = new GenerateBlocks(Allocator.TempJob);
+            var buffers = new GenerateBlocks(Allocator.Persistent);
             GenerateChunksCPU(chunks, buffers, p);
             buffers.Dispose();
             // await Awaitable.MainThreadAsync();
@@ -327,7 +327,7 @@ namespace Cubes
         {
             Mesh.MeshDataArray dataArray = default;
 
-            NativeArray<Chunk> meshChunksBuf = new(chunks.Length, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+            NativeArray<Chunk> meshChunksBuf = new(chunks.Length, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
             int meshCount = 0;
 
             for (int i = 0; i < chunks.Length; i++)
@@ -366,7 +366,7 @@ namespace Cubes
                 }
 
                 Profiler.BeginSample("CreateMesh");
-                var buffers = new CreateMesh(Allocator.TempJob);
+                var buffers = new CreateMesh(Allocator.Persistent);
 
                 for (int i = 0; i < meshChunks.Length; i++)
                 {
