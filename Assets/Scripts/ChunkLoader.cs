@@ -272,7 +272,7 @@ namespace Cubes
             {
                 Profiler.BeginSample("GenerateBlocksGPU");
                 var toGenerate = chunks.GetSubArray(generated, math.min(chunks.Length - generated, GenerateBlocksGPU.MaxChunksPerDispatch));
-                var runAsync = GenerateBlocksGPU.RunAsync(toGenerate, buffers, p, _procGenShader);
+                var runAsync = GenerateBlocksGPU.RunAsync(toGenerate, buffers, p, _procGenShader, cancellationToken);
                 Profiler.EndSample();
                 await runAsync;
                 generated += toGenerate.Length;
