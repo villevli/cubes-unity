@@ -50,6 +50,7 @@ namespace Cubes
         private NativeParallelHashMap<int3, Chunk> _chunkMap;
 
         private CancellationTokenSource _cts;
+        private int _backgroundTaskCount = 0;
 
         private int3 _lastChunkPos = int.MinValue;
 
@@ -95,6 +96,7 @@ namespace Cubes
             _chunkMap = new(1024, Allocator.Persistent);
 
             _cts ??= new();
+            UnityEngine.Debug.Assert(_backgroundTaskCount == 0);
         }
 
         private void Deinit()
@@ -112,6 +114,8 @@ namespace Cubes
             _cts.Cancel();
             _cts.Dispose();
             _cts = new();
+
+            WaitBackgroundTasks();
 
             foreach (var kv in _renderedChunks)
             {
@@ -132,6 +136,30 @@ namespace Cubes
             BlocksInMemoryCount = 0;
 
             _lastChunkPos = int.MinValue;
+        }
+
+        private void WaitBackgroundTasks()
+        {
+            while (_backgroundTaskCount > 0) { }
+        }
+
+        private struct BackgroundTaskScope : IDisposable
+        {
+            private ChunkLoader target;
+
+            public BackgroundTaskScope(ChunkLoader target)
+            {
+                this.target = target;
+                Interlocked.Increment(ref target._backgroundTaskCount);
+            }
+
+            public void Dispose()
+            {
+                if (target == null)
+                    return;
+                Interlocked.Decrement(ref target._backgroundTaskCount);
+                target = null;
+            }
         }
 
         private void CreateBlockTypesAtlas()
@@ -284,12 +312,15 @@ namespace Cubes
         {
             // TODO: Use multiple background threads
             await Awaitable.BackgroundThreadAsync();
-            if (cancellationToken.IsCancellationRequested)
-                return;
+            using (new BackgroundTaskScope(this))
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    return;
 
-            var buffers = new GenerateBlocks(Allocator.Persistent);
-            GenerateChunksCPU(chunks, buffers, p);
-            buffers.Dispose();
+                var buffers = new GenerateBlocks(Allocator.Persistent);
+                GenerateChunksCPU(chunks, buffers, p);
+                buffers.Dispose();
+            }
             // await Awaitable.MainThreadAsync();
         }
 
@@ -358,30 +389,32 @@ namespace Cubes
                 dataArray = Mesh.AllocateWritableMeshData(meshChunks.Length);
 
                 await Awaitable.BackgroundThreadAsync();
-                if (cancellationToken.IsCancellationRequested)
+                using (new BackgroundTaskScope(this))
                 {
-                    dataArray.Dispose();
-                    meshChunksBuf.Dispose();
-                    return;
-                }
-
-                Profiler.BeginSample("CreateMesh");
-                var buffers = new CreateMesh(Allocator.Persistent);
-
-                for (int i = 0; i < meshChunks.Length; i++)
-                {
-                    CreateMesh.Run(meshChunks[i], _chunkMap, _blockTypes, ref buffers, _createMeshOptions);
-
-                    if (buffers.VertexCount > 0)
+                    if (cancellationToken.IsCancellationRequested)
                     {
-                        var meshData = dataArray[i];
-                        CreateMesh.SetMeshData(buffers, ref meshData);
+                        dataArray.Dispose();
+                        meshChunksBuf.Dispose();
+                        return;
                     }
+
+                    Profiler.BeginSample("CreateMesh");
+                    var buffers = new CreateMesh(Allocator.Persistent);
+
+                    for (int i = 0; i < meshChunks.Length; i++)
+                    {
+                        CreateMesh.Run(meshChunks[i], _chunkMap, _blockTypes, ref buffers, _createMeshOptions);
+
+                        if (buffers.VertexCount > 0)
+                        {
+                            var meshData = dataArray[i];
+                            CreateMesh.SetMeshData(buffers, ref meshData);
+                        }
+                    }
+
+                    buffers.Dispose();
+                    Profiler.EndSample();
                 }
-
-                buffers.Dispose();
-                Profiler.EndSample();
-
                 await Awaitable.MainThreadAsync();
                 if (cancellationToken.IsCancellationRequested)
                 {
