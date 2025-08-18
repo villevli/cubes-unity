@@ -35,6 +35,11 @@ namespace Cubes
         [SerializeField]
         private GameObject _chunkPrefab;
 
+        [SerializeField]
+        private bool _cullChunks = true;
+        [SerializeField]
+        private bool _useGameObjects = false;
+
         private Texture2D _atlas;
         private Material _atlasMaterial;
 
@@ -44,10 +49,14 @@ namespace Cubes
         {
             public GameObject go;
             public Mesh mesh;
+            public Matrix4x4 objectToWorld;
         }
 
         private Dictionary<int3, RenderedChunk> _renderedChunks = new();
         private NativeParallelHashMap<int3, Chunk> _chunkMap;
+        private NativeParallelHashMap<int3, RenderableChunk> _renderMap;
+
+        private NativeArray<int3> _visibleChunks;
 
         private CancellationTokenSource _cts;
         private int _backgroundTaskCount = 0;
@@ -63,6 +72,8 @@ namespace Cubes
         public int LastChunksLoadedCount { get; private set; }
         public int LastChunksRenderedCount { get; private set; }
         public float LastChunkUpdateDurationMs { get; private set; }
+
+        public int VisibleChunks { get; private set; }
 
         private void OnEnable()
         {
@@ -87,6 +98,52 @@ namespace Cubes
                 _lastChunkPos = currentChunkPos;
                 UpdateChunksInRange(currentChunkPos, _cts.Token);
             }
+
+            if (_cullChunks)
+            {
+                Profiler.BeginSample("FindVisibleChunks");
+                VisibleChunks = CullChunks.FindVisibleChunks(ref _visibleChunks, _renderMap, Camera.main, _viewDistance);
+                Profiler.EndSample();
+            }
+            else
+            {
+                VisibleChunks = 0;
+            }
+
+            if (!_useGameObjects)
+            {
+                Profiler.BeginSample("SubmitVisibleMeshes");
+                // FIXME: This is not practical due to the overhead. Use BatchRenderGroup?
+                RenderParams rparams = new(_atlasMaterial);
+                if (_cullChunks)
+                {
+                    var visibleSpan = _visibleChunks.AsReadOnlySpan()[..VisibleChunks];
+                    for (int i = 0; i < visibleSpan.Length; i++)
+                    {
+                        if (_renderedChunks.TryGetValue(visibleSpan[i], out var rchunk) && rchunk.mesh is not null)
+                            Graphics.RenderMesh(rparams, rchunk.mesh, 0, rchunk.objectToWorld);
+                    }
+                }
+                else
+                {
+                    foreach (var item in _renderedChunks)
+                    {
+                        var rchunk = item.Value;
+                        if (rchunk.mesh is not null)
+                            Graphics.RenderMesh(rparams, rchunk.mesh, 0, rchunk.objectToWorld);
+                    }
+                }
+                Profiler.EndSample();
+            }
+        }
+
+        private void OnDrawGizmos()
+        {
+            Gizmos.color = Color.green;
+            for (int i = 0; i < VisibleChunks; i++)
+            {
+                Gizmos.DrawWireCube((float3)(_visibleChunks[i] * Chunk.Size + Chunk.Size / 2), (float3)Chunk.Size);
+            }
         }
 
         private void Init()
@@ -94,6 +151,8 @@ namespace Cubes
             CreateBlockTypesAtlas();
 
             _chunkMap = new(1024, Allocator.Persistent);
+            _renderMap = new(1024, Allocator.Persistent);
+            _visibleChunks = new(100000, Allocator.Persistent);
 
             _cts ??= new();
             UnityEngine.Debug.Assert(_backgroundTaskCount == 0);
@@ -104,6 +163,8 @@ namespace Cubes
             Unload();
 
             _chunkMap.Dispose();
+            _renderMap.Dispose();
+            _visibleChunks.Dispose();
 
             DestroyImmediate(_atlas);
             _blockTypes.Dispose();
@@ -124,6 +185,7 @@ namespace Cubes
                 DestroyImmediate(chunk.go);
             }
             _renderedChunks.Clear();
+            _renderMap.Clear();
             MeshCount = 0;
             MeshMemoryUsedBytes = 0;
 
@@ -134,6 +196,8 @@ namespace Cubes
             _chunkMap.Clear();
             LoadedChunkCount = 0;
             BlocksInMemoryCount = 0;
+
+            VisibleChunks = 0;
 
             _lastChunkPos = int.MinValue;
         }
@@ -252,6 +316,25 @@ namespace Cubes
                     chunksToLoadBuf.Dispose();
                     chunksToRenderBuf.Dispose();
                     return;
+                }
+
+                if (_cullChunks)
+                {
+                    // TODO: parallel job
+                    await Awaitable.BackgroundThreadAsync();
+                    using (new BackgroundTaskScope(this))
+                    {
+                        Profiler.BeginSample("CalculateConnectedFaces");
+                        CullChunks.CalculateConnectedFaces(ref chunksToLoad);
+                        Profiler.EndSample();
+                    }
+                    await Awaitable.MainThreadAsync();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        chunksToLoadBuf.Dispose();
+                        chunksToRenderBuf.Dispose();
+                        return;
+                    }
                 }
 
                 Profiler.BeginSample("MarkLoadedChunks");
@@ -378,6 +461,11 @@ namespace Cubes
                         DestroyImmediate(rchunk.mesh);
                         rchunk.mesh = null;
                         _renderedChunks[chunks[i].Position] = rchunk;
+                        _renderMap[chunks[i].Position] = new()
+                        {
+                            MeshId = 0,
+                            ConnectedFaces = ~0,
+                        };
                     }
                 }
             }
@@ -452,6 +540,11 @@ namespace Cubes
                 rchunk.mesh = mesh;
                 meshes[i] = mesh;
                 _renderedChunks[chunk.Position] = rchunk;
+                _renderMap[chunks[i].Position] = new()
+                {
+                    MeshId = mesh.GetInstanceID(),
+                    ConnectedFaces = chunk.ConnectedFaces,
+                };
             }
             meshChunksBuf.Dispose();
 
@@ -491,7 +584,14 @@ namespace Cubes
                     MeshCount++;
                     MeshMemoryUsedBytes += GetSizeOfMesh(rchunk.mesh);
 
-                    if (go == null)
+                    if (!_useGameObjects)
+                    {
+                        rchunk.objectToWorld = Matrix4x4.TRS(
+                            (float3)(chunk.Position * Chunk.Size),
+                            Quaternion.identity,
+                            (float3)(Chunk.Size * 255 / 128f));
+                    }
+                    else if (go == null)
                     {
                         Profiler.BeginSample("InstantiatePrefab");
                         go = Instantiate(_chunkPrefab);
@@ -514,6 +614,12 @@ namespace Cubes
                 }
 
                 _renderedChunks[chunk.Position] = rchunk;
+                var meshId = rchunk.mesh?.GetInstanceID() ?? 0;
+                _renderMap[chunks[i].Position] = new()
+                {
+                    MeshId = meshId,
+                    ConnectedFaces = chunk.ConnectedFaces,
+                };
             }
             Profiler.EndSample();
         }

@@ -93,6 +93,7 @@ namespace Cubes
             Label(Invariant($"Chunks: {_chunkLoader.LoadedChunkCount}/{_chunkLoader.TrackedChunkCount}"));
             Label(Invariant($"Blocks: {_chunkLoader.BlocksInMemoryCount} ({BytesToMB(_chunkLoader.BlocksInMemoryCount)})"));
             Label(Invariant($"Meshes: {_chunkLoader.MeshCount} ({BytesToMB(_chunkLoader.MeshMemoryUsedBytes)})"));
+            Label(Invariant($"Visible: {_chunkLoader.VisibleChunks}"));
             GUILayout.Space(10);
             Label(_mainThread);
             Label(_renderThread);
