@@ -38,7 +38,6 @@ namespace Cubes
             const int size = Chunk.Size;
             NativeArray<byte> filled = new(size * size * size, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
             NativeRingQueue<int3> fillQueue = new(size * size * size, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-            const int numFaces = 6;
 
             foreach (ref var chunk in chunks.AsSpan())
             {
@@ -76,16 +75,6 @@ namespace Cubes
                     if (IsOpaque(Chunk.GetBlock(blocks, p)))
                         return;
 
-                    ReadOnlySpan<int3> faceNormals = stackalloc int3[numFaces]
-                    {
-                        new(0, -1, 0),
-                        new(0, 1, 0),
-                        new(0, 0, -1),
-                        new(0, 0, 1),
-                        new(-1, 0, 0),
-                        new(1, 0, 0),
-                    };
-
                     short faceSet = 0;
                     Chunk.GetBlock(filled, p) = 1;
                     fillQueue.Enqueue(p);
@@ -93,9 +82,9 @@ namespace Cubes
                     while (fillQueue.TryDequeue(out var fp))
                     {
                         // Traverse to neighbors
-                        for (int face = 0; face < numFaces; face++)
+                        for (int face = 0; face < 6; face++)
                         {
-                            var np = fp + faceNormals[face];
+                            var np = fp + Chunk.FaceNormal(face);
                             // Check if exiting boundaries
                             if (np.y < 0)
                                 faceSet |= 1;
@@ -162,8 +151,6 @@ namespace Cubes
             public sbyte CameFromFace; // down -y, up +y, south -z, north +z, west -x, east +x
         }
 
-        private static int OppositeFace(int face) => face % 2 == 0 ? face + 1 : face - 1;
-
         /// <summary>
         /// Finds visible chunks based on the camera pos and frustum planes.
         /// Copies the chunks into the <paramref name="result"/> array and returns the count.
@@ -193,22 +180,11 @@ namespace Cubes
             NativeRingQueue<Step> queue = new(4096 * 2, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
 
             // Find valid traversal directions
-            const int numFaces = 6;
-            ReadOnlySpan<int3> faceNormals = stackalloc int3[numFaces]
-            {
-                new(0, -1, 0),
-                new(0, 1, 0),
-                new(0, 0, -1),
-                new(0, 0, 1),
-                new(-1, 0, 0),
-                new(1, 0, 0),
-            };
-
             float cosFov = math.cos(math.radians(math.min(90 + fov * (2 / 3f), 180)));
             byte validDirs = 0;
-            for (int i = 0; i < numFaces; i++)
+            for (int i = 0; i < 6; i++)
             {
-                if (math.dot(faceNormals[i], cameraForward) >= cosFov)
+                if (math.dot(Chunk.FaceNormal(i), cameraForward) >= cosFov)
                     validDirs |= (byte)(1 << i);
             }
 
@@ -260,7 +236,7 @@ namespace Cubes
                 if (chunk.ConnectedFaces == 0)
                     continue;
 
-                for (int face = 0; face < numFaces; face++)
+                for (int face = 0; face < 6; face++)
                 {
                     if (((1 << face) & validDirs) == 0)
                         continue;
@@ -275,7 +251,7 @@ namespace Cubes
                     // Mark this chunk face traversed
                     bits |= (byte)(1 << (face + 2));
 
-                    var neighborPos = pos + faceNormals[face];
+                    var neighborPos = pos + Chunk.FaceNormal(face);
 
                     int neighborIdx = GetIdx(neighborPos - gridOffset);
                     // Outside grid (axis aligned view distance)
@@ -304,7 +280,7 @@ namespace Cubes
                     // Mark this chunk passed frustum culling
                     neighborBits |= (byte)(1 << 1);
 
-                    int cameFromFace = OppositeFace(face);
+                    int cameFromFace = Chunk.OppositeFace(face);
 
                     if (!chunks.TryGetValue(neighborPos, out var neighborChunk))
                     {

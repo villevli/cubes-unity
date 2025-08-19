@@ -116,6 +116,22 @@ namespace Cubes
             return (FaceBits(a) & FaceBits(b) & connectedFaces) != 0;
         }
 
+        public static int3 FaceNormal(int face)
+        {
+            return face switch
+            {
+                0 => new(0, -1, 0),
+                1 => new(0, 1, 0),
+                2 => new(0, 0, -1),
+                3 => new(0, 0, 1),
+                4 => new(-1, 0, 0),
+                5 => new(1, 0, 0),
+                _ => default,
+            };
+        }
+
+        public static int OppositeFace(int face) => face % 2 == 0 ? face + 1 : face - 1;
+
         public Chunk(int3 position)
         {
             Position = position;
