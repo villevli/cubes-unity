@@ -38,17 +38,19 @@ namespace Cubes
             _lookAngles.x = rot.y;
             _lookAngles.y = rot.x;
 
-            _inputActive = true;
+            _inputActive = Touchscreen.current != null;
         }
 
         private void Update()
         {
+            Rect displayRect = new(0, 0, Screen.width, Screen.height);
+
             // Activate input and lock cursor when using mouse + keyboard
             if (Keyboard.current?.escapeKey.wasPressedThisFrame ?? false)
             {
                 _inputActive = !_inputActive;
             }
-            if (Mouse.current?.press.wasReleasedThisFrame ?? false)
+            if ((Mouse.current?.press.wasReleasedThisFrame ?? false) && displayRect.Contains(Mouse.current.position.ReadValue()))
             {
                 _inputActive = true;
             }
