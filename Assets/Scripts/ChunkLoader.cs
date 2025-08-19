@@ -56,7 +56,7 @@ namespace Cubes
         private NativeParallelHashMap<int3, Chunk> _chunkMap;
         private NativeParallelHashMap<int3, RenderableChunk> _renderMap;
 
-        private NativeArray<int3> _visibleChunks;
+        private NativeArray<CullResult> _visibleChunks;
 
         private CancellationTokenSource _cts;
         private int _backgroundTaskCount = 0;
@@ -120,7 +120,7 @@ namespace Cubes
                     var visibleSpan = _visibleChunks.AsReadOnlySpan()[..VisibleChunks];
                     for (int i = 0; i < visibleSpan.Length; i++)
                     {
-                        if (_renderedChunks.TryGetValue(visibleSpan[i], out var rchunk) && rchunk.mesh is not null)
+                        if (_renderedChunks.TryGetValue(visibleSpan[i].Pos, out var rchunk) && rchunk.mesh is not null)
                             Graphics.RenderMesh(rparams, rchunk.mesh, 0, rchunk.objectToWorld);
                     }
                 }
@@ -139,10 +139,20 @@ namespace Cubes
 
         private void OnDrawGizmos()
         {
+            Gizmos.matrix = Matrix4x4.TRS((float3)(Chunk.Size / 2), Quaternion.identity, (float3)Chunk.Size);
+
+            var cam = Camera.current;
+            var cPos = (int3)math.floor((float3)cam.transform.position / Chunk.Size);
+            Gizmos.color = Color.grey;
+            Gizmos.DrawWireCube((float3)cPos, (float3)1);
+
             Gizmos.color = Color.green;
             for (int i = 0; i < VisibleChunks; i++)
             {
-                Gizmos.DrawWireCube((float3)(_visibleChunks[i] * Chunk.Size + Chunk.Size / 2), (float3)Chunk.Size);
+                var c = _visibleChunks[i];
+                Gizmos.DrawLine((float3)(c.Pos + Chunk.FaceNormal(c.CameFromFace)), (float3)c.Pos);
+
+                // Gizmos.DrawWireCube((float3)c.Pos, (float3)1);
             }
         }
 

@@ -15,6 +15,12 @@ namespace Cubes
         public short ConnectedFaces;
     }
 
+    public struct CullResult
+    {
+        public int3 Pos;
+        public int CameFromFace;
+    }
+
     /// <summary>
     /// Cull chunks that are not seen by a camera.
     /// </summary>
@@ -160,7 +166,7 @@ namespace Cubes
         /// <param name="cameraPos"></param>
         /// <param name="frustumPlanes"></param>
         /// <returns>count of visible chunks</returns>
-        public static int FindVisibleChunks(ref NativeArray<int3> result, in NativeParallelHashMap<int3, RenderableChunk> chunks, Camera camera, int viewDistance)
+        public static int FindVisibleChunks(ref NativeArray<CullResult> result, in NativeParallelHashMap<int3, RenderableChunk> chunks, Camera camera, int viewDistance)
         {
             float maxFov = math.max(camera.fieldOfView, Camera.VerticalToHorizontalFieldOfView(camera.fieldOfView, camera.aspect));
             return FindVisibleChunks(ref result, chunks,
@@ -172,7 +178,7 @@ namespace Cubes
         }
 
         [BurstCompile]
-        public static int FindVisibleChunks(ref NativeArray<int3> result, in NativeParallelHashMap<int3, RenderableChunk> chunks,
+        public static int FindVisibleChunks(ref NativeArray<CullResult> result, in NativeParallelHashMap<int3, RenderableChunk> chunks,
                                             in float3 cameraPos, in float3 cameraForward, float fov, in NativeArray<Plane> frustumPlanes, int viewDistance)
         {
             // https://tomcc.github.io/2014/08/31/visibility-2.
@@ -226,7 +232,11 @@ namespace Cubes
                 // Add result if not added yet
                 if ((bits & 0x1) == 0 && chunk.MeshId != 0)
                 {
-                    result[count++] = pos;
+                    result[count++] = new()
+                    {
+                        Pos = pos,
+                        CameFromFace = step.CameFromFace
+                    };
                     if (count >= result.Length)
                         break;
                 }
