@@ -204,7 +204,7 @@ namespace Cubes
                 new(1, 0, 0),
             };
 
-            float cosFov = math.cos(math.radians(90 + fov * 0.5f));
+            float cosFov = math.cos(math.radians(math.min(90 + fov * (2 / 3f), 180)));
             byte validDirs = 0;
             for (int i = 0; i < numFaces; i++)
             {
