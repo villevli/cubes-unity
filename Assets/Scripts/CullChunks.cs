@@ -198,9 +198,7 @@ namespace Cubes
             });
 
             // Continous 3d grid centered around the cPos
-            // bit 0 = has chunk been added to result
-            // bit 1 = has chunk already passed frustum culling
-            // bits 2-7 = have we traversed via each face
+            // Tells which chunks have been visited
             int gridSize = viewDistance * 2;
             int3 gridOffset = cPos - viewDistance;
             NativeArray<byte> grid = new(gridSize * gridSize * gridSize, Allocator.Temp, NativeArrayOptions.ClearMemory);
@@ -216,10 +214,8 @@ namespace Cubes
             {
                 int3 pos = step.ChunkPos;
                 var chunk = step.Chunk;
-                ref var bits = ref gridSpan[GetIdx(pos - gridOffset)];
 
-                // Add result if not added yet
-                if ((bits & 0x1) == 0 && chunk.MeshId != 0)
+                if (chunk.MeshId != 0)
                 {
                     result[count++] = new()
                     {
@@ -229,8 +225,6 @@ namespace Cubes
                     if (count >= result.Length)
                         break;
                 }
-                // Mark result added
-                bits |= 1;
 
                 if (chunk.ConnectedFaces == 0)
                     continue;
@@ -244,13 +238,6 @@ namespace Cubes
                     if (!Chunk.AreFacesConnected(chunk.ConnectedFaces, step.CameFromFace, face))
                         continue;
 
-                    // Already traversed via this face
-                    if ((bits >> (face + 2) & 0x1) == 1)
-                        continue;
-
-                    // Mark this chunk face traversed
-                    bits |= (byte)(1 << (face + 2));
-
                     var neighborPos = pos + Chunk.FaceNormal(face);
 
                     int neighborIdx = GetIdx(neighborPos - gridOffset);
@@ -258,17 +245,15 @@ namespace Cubes
                     if (neighborIdx < 0 || neighborIdx >= gridSpan.Length)
                         continue;
 
-                    ref var neighborBits = ref gridSpan[neighborIdx];
+                    ref var neighborVisited = ref gridSpan[neighborIdx];
 
-                    // Skip if all faces already traversed
-                    if (((neighborBits >> 2) & 0b111111) == 0b111111)
-                    {
+                    // Chunk already visited
+                    // NOTE: Could this cause incorrect culling if a chunk has a path through it that can only be seen from a different side?
+                    if (neighborVisited == 1)
                         continue;
-                    }
 
                     // Frustum cull
-                    // Check bits in case already passed frustum cull before
-                    if ((neighborBits >> 1 & 0x1) == 0 && !TestPlanesAABB(frustumPlanes, new()
+                    if (!TestPlanesAABB(frustumPlanes, new()
                     {
                         center = (float3)(neighborPos * Chunk.Size + Chunk.Size / 2),
                         extents = (float3)(Chunk.Size / 2)
@@ -277,8 +262,8 @@ namespace Cubes
                         continue;
                     }
 
-                    // Mark this chunk passed frustum culling
-                    neighborBits |= (byte)(1 << 1);
+                    // Mark this chunk visited
+                    neighborVisited = 1;
 
                     if (!chunks.TryGetValue(neighborPos, out var neighborChunk))
                     {
