@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
+using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine;
@@ -15,6 +16,7 @@ namespace Cubes
     /// Updates loaded chunks when the camera moves.
     /// Uses background threads to keep the framerate smooth.
     /// </summary>
+    [BurstCompile]
     public class ChunkLoader : MonoBehaviour
     {
         [SerializeField]
@@ -96,7 +98,9 @@ namespace Cubes
             if (!_lastChunkPos.Equals(currentChunkPos))
             {
                 _lastChunkPos = currentChunkPos;
+                Profiler.BeginSample("UpdateChunksInRange");
                 UpdateChunksInRange(currentChunkPos, _cts.Token);
+                Profiler.EndSample();
             }
 
             if (_cullChunks)
@@ -182,6 +186,7 @@ namespace Cubes
 
         public void Unload()
         {
+            Profiler.BeginSample("Unload");
             _cts.Cancel();
             _cts.Dispose();
             _cts = new();
@@ -210,6 +215,7 @@ namespace Cubes
             VisibleChunks = 0;
 
             _lastChunkPos = int.MinValue;
+            Profiler.EndSample();
         }
 
         private void WaitBackgroundTasks()
@@ -267,53 +273,32 @@ namespace Cubes
         {
             long startTs = Stopwatch.GetTimestamp();
 
-            Profiler.BeginSample("FindChunksToLoad");
             int3 viewDist = _viewDistance;
             int maxChunksInView = viewDist.x * viewDist.y * viewDist.z * 8;
 
-            // TODO: Unload chunks that are out of range
-
-            // FIXME: Use persistent alloc. There is no guarantee that this will take less than 4 frames
+            Profiler.BeginSample("AllocateBuffers");
             var chunksToLoadBuf = new NativeArray<Chunk>(maxChunksInView, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
             int chunksToLoadCount = 0;
             var chunksToRenderBuf = new NativeArray<Chunk>(maxChunksInView * 2, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
             int chunksToRenderCount = 0;
-
-            void CheckNeighbor(int3 p)
-            {
-                if (_chunkMap.TryGetValue(p, out var nChunk) && nChunk.IsLoaded && !nChunk.IsPendingUpdate)
-                    chunksToRenderBuf[chunksToRenderCount++] = nChunk;
-            }
-
-            for (int y = -viewDist.y; y < viewDist.y; y++)
-            {
-                for (int z = -viewDist.z; z < viewDist.z; z++)
-                {
-                    for (int x = -viewDist.x; x < viewDist.x; x++)
-                    {
-                        var p = currentChunkPos + new int3(x, y, z);
-
-                        if (!_chunkMap.TryGetValue(p, out var chunk))
-                            chunk = new Chunk(p);
-
-                        if (!chunk.IsLoaded && !chunk.IsPendingUpdate)
-                        {
-                            chunk.IsPendingUpdate = true;
-                            _chunkMap[p] = chunk;
-                            chunksToLoadBuf[chunksToLoadCount++] = chunk;
-
-                            // Update the mesh of neighboring chunks if they have been loaded already
-                            CheckNeighbor(p + new int3(-1, 0, 0));
-                            CheckNeighbor(p + new int3(1, 0, 0));
-                            CheckNeighbor(p + new int3(0, -1, 0));
-                            CheckNeighbor(p + new int3(0, 1, 0));
-                            CheckNeighbor(p + new int3(0, 0, -1));
-                            CheckNeighbor(p + new int3(0, 0, 1));
-                        }
-                    }
-                }
-            }
             Profiler.EndSample();
+
+            await Awaitable.BackgroundThreadAsync();
+            using (new BackgroundTaskScope(this))
+            {
+                // TODO: Unload chunks that are out of range
+
+                Profiler.BeginSample("FindChunksToLoad");
+                FindChunksToLoad(ref _chunkMap, currentChunkPos, viewDist, ref chunksToLoadBuf, ref chunksToLoadCount, ref chunksToRenderBuf, ref chunksToRenderCount);
+                Profiler.EndSample();
+            }
+            await Awaitable.MainThreadAsync();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                chunksToLoadBuf.Dispose();
+                chunksToRenderBuf.Dispose();
+                return;
+            }
 
             if (chunksToLoadCount > 0)
             {
@@ -371,6 +356,55 @@ namespace Cubes
             LastChunksLoadedCount = chunksToLoadCount;
             LastChunksRenderedCount = chunksToRenderCount;
             LastChunkUpdateDurationMs = (float)TimeSpan.FromTicks(Stopwatch.GetTimestamp() - startTs).TotalMilliseconds;
+        }
+
+        [BurstCompile]
+        private static void FindChunksToLoad(
+            ref NativeParallelHashMap<int3, Chunk> chunkMap, in int3 currentChunkPos, in int3 viewDist,
+            ref NativeArray<Chunk> chunksToLoad, ref int chunksToLoadCount,
+            ref NativeArray<Chunk> chunksToRender, ref int chunksToRenderCount
+        )
+        {
+            var _chunkMap = chunkMap;
+            var _chunksToRender = chunksToRender;
+            int renderCount = 0;
+
+            void CheckNeighbor(int3 p)
+            {
+                if (_chunkMap.TryGetValue(p, out var nChunk) && nChunk.IsLoaded && !nChunk.IsPendingUpdate)
+                    _chunksToRender[renderCount++] = nChunk;
+            }
+
+            for (int y = -viewDist.y; y < viewDist.y; y++)
+            {
+                for (int z = -viewDist.z; z < viewDist.z; z++)
+                {
+                    for (int x = -viewDist.x; x < viewDist.x; x++)
+                    {
+                        var p = currentChunkPos + new int3(x, y, z);
+
+                        if (!chunkMap.TryGetValue(p, out var chunk))
+                            chunk = new Chunk(p);
+
+                        if (!chunk.IsLoaded && !chunk.IsPendingUpdate)
+                        {
+                            chunk.IsPendingUpdate = true;
+                            chunkMap[p] = chunk;
+                            chunksToLoad[chunksToLoadCount++] = chunk;
+
+                            // Update the mesh of neighboring chunks if they have been loaded already
+                            CheckNeighbor(p + new int3(-1, 0, 0));
+                            CheckNeighbor(p + new int3(1, 0, 0));
+                            CheckNeighbor(p + new int3(0, -1, 0));
+                            CheckNeighbor(p + new int3(0, 1, 0));
+                            CheckNeighbor(p + new int3(0, 0, -1));
+                            CheckNeighbor(p + new int3(0, 0, 1));
+                        }
+                    }
+                }
+            }
+
+            chunksToRenderCount = renderCount;
         }
 
         private Awaitable GenerateChunksAsync(NativeArray<Chunk> chunks, CancellationToken cancellationToken)
@@ -451,9 +485,12 @@ namespace Cubes
         {
             Mesh.MeshDataArray dataArray = default;
 
+            Profiler.BeginSample("AllocateBuffer");
             NativeArray<Chunk> meshChunksBuf = new(chunks.Length, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+            Profiler.EndSample();
             int meshCount = 0;
 
+            Profiler.BeginSample("CollectMeshChunks");
             for (int i = 0; i < chunks.Length; i++)
             {
                 if (CreateMesh.NeedsMesh(chunks[i]))
@@ -462,6 +499,7 @@ namespace Cubes
                 }
                 else
                 {
+                    Profiler.BeginSample("ReleaseExisting");
                     // Release possible existing mesh
                     if (_renderedChunks.TryGetValue(chunks[i].Position, out var rchunk) && rchunk.mesh is not null)
                     {
@@ -477,25 +515,21 @@ namespace Cubes
                             ConnectedFaces = ~0,
                         };
                     }
+                    Profiler.EndSample();
                 }
             }
+            Profiler.EndSample();
 
             var meshChunks = meshChunksBuf.GetSubArray(0, meshCount);
-
             if (meshChunks.Length > 0)
             {
+                Profiler.BeginSample("AllocateWritableMeshData");
                 dataArray = Mesh.AllocateWritableMeshData(meshChunks.Length);
+                Profiler.EndSample();
 
                 await Awaitable.BackgroundThreadAsync();
                 using (new BackgroundTaskScope(this))
                 {
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        dataArray.Dispose();
-                        meshChunksBuf.Dispose();
-                        return;
-                    }
-
                     Profiler.BeginSample("CreateMesh");
                     var buffers = new CreateMesh(Allocator.Persistent);
 
@@ -522,9 +556,8 @@ namespace Cubes
                 }
             }
 
+            Profiler.BeginSample("AllocateMeshes");
             var meshes = new Mesh[meshChunks.Length];
-
-            Profiler.BeginSample("ApplyMesh");
             for (int i = 0; i < meshChunks.Length; i++)
             {
                 var chunk = meshChunks[i];
@@ -550,12 +583,17 @@ namespace Cubes
                 rchunk.mesh = mesh;
                 meshes[i] = mesh;
                 _renderedChunks[chunk.Position] = rchunk;
+
+                Profiler.BeginSample("UpdateRenderHashMap");
                 _renderMap[chunks[i].Position] = new()
                 {
                     MeshId = mesh.GetInstanceID(),
                     ConnectedFaces = chunk.ConnectedFaces,
                 };
+                Profiler.EndSample();
             }
+            Profiler.EndSample();
+
             meshChunksBuf.Dispose();
 
             if (meshes.Length > 0)
@@ -564,7 +602,6 @@ namespace Cubes
                 Mesh.ApplyAndDisposeWritableMeshData(dataArray, meshes, MeshUpdateFlags.DontRecalculateBounds | MeshUpdateFlags.DontValidateIndices);
                 Profiler.EndSample();
             }
-            Profiler.EndSample();
 
             Profiler.BeginSample("ApplyGameObject");
             for (int i = 0; i < chunks.Length; i++)
@@ -624,12 +661,13 @@ namespace Cubes
                 }
 
                 _renderedChunks[chunk.Position] = rchunk;
-                var meshId = rchunk.mesh?.GetInstanceID() ?? 0;
+                Profiler.BeginSample("UpdateRenderHashMap");
                 _renderMap[chunks[i].Position] = new()
                 {
-                    MeshId = meshId,
+                    MeshId = rchunk.mesh?.GetInstanceID() ?? 0,
                     ConnectedFaces = chunk.ConnectedFaces,
                 };
+                Profiler.EndSample();
             }
             Profiler.EndSample();
         }
