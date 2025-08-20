@@ -155,6 +155,7 @@ namespace Cubes
             public int3 ChunkPos;
             public RenderableChunk Chunk;
             public sbyte CameFromFace; // down -y, up +y, south -z, north +z, west -x, east +x
+            public byte TraversedDirs;
         }
 
         /// <summary>
@@ -168,31 +169,19 @@ namespace Cubes
         /// <returns>count of visible chunks</returns>
         public static int FindVisibleChunks(ref NativeArray<CullResult> result, in NativeParallelHashMap<int3, RenderableChunk> chunks, Camera camera, int viewDistance)
         {
-            float maxFov = math.max(camera.fieldOfView, Camera.VerticalToHorizontalFieldOfView(camera.fieldOfView, camera.aspect));
             return FindVisibleChunks(ref result, chunks,
                 camera.transform.position,
-                camera.transform.forward,
-                maxFov,
                 new(GeometryUtility.CalculateFrustumPlanes(camera), Allocator.Temp),
                 viewDistance);
         }
 
         [BurstCompile]
         public static int FindVisibleChunks(ref NativeArray<CullResult> result, in NativeParallelHashMap<int3, RenderableChunk> chunks,
-                                            in float3 cameraPos, in float3 cameraForward, float fov, in NativeArray<Plane> frustumPlanes, int viewDistance)
+                                            in float3 cameraPos, in NativeArray<Plane> frustumPlanes, int viewDistance)
         {
             // https://tomcc.github.io/2014/08/31/visibility-2.
             int count = 0;
             NativeRingQueue<Step> queue = new(4096 * 2, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
-
-            // Find valid traversal directions
-            float cosFov = math.cos(math.radians(math.min(90 + fov * (2 / 3f), 180)));
-            byte validDirs = 0;
-            for (int i = 0; i < 6; i++)
-            {
-                if (math.dot(Chunk.FaceNormal(i), cameraForward) >= cosFov)
-                    validDirs |= (byte)(1 << i);
-            }
 
             // Push camera chunk
             int3 cPos = (int3)math.floor(cameraPos / Chunk.Size);
@@ -248,7 +237,8 @@ namespace Cubes
 
                 for (int face = 0; face < 6; face++)
                 {
-                    if (((1 << face) & validDirs) == 0)
+                    // Don't go backwards against any direction we have come from before in the steps
+                    if ((step.TraversedDirs & (1 << Chunk.OppositeFace(face))) != 0)
                         continue;
 
                     if (!Chunk.AreFacesConnected(chunk.ConnectedFaces, step.CameFromFace, face))
@@ -271,7 +261,7 @@ namespace Cubes
                     ref var neighborBits = ref gridSpan[neighborIdx];
 
                     // Skip if all faces already traversed
-                    if (((neighborBits >> 2) & validDirs) == validDirs)
+                    if (((neighborBits >> 2) & 0b111111) == 0b111111)
                     {
                         continue;
                     }
@@ -290,8 +280,6 @@ namespace Cubes
                     // Mark this chunk passed frustum culling
                     neighborBits |= (byte)(1 << 1);
 
-                    int cameFromFace = Chunk.OppositeFace(face);
-
                     if (!chunks.TryGetValue(neighborPos, out var neighborChunk))
                     {
                         neighborChunk = new()
@@ -303,11 +291,16 @@ namespace Cubes
                         };
                     }
 
+                    // Mark the direction used in this path
+                    var newDirs = step.TraversedDirs;
+                    newDirs |= (byte)(1 << face);
+
                     Step neighborStep = new()
                     {
                         ChunkPos = neighborPos,
                         Chunk = neighborChunk,
-                        CameFromFace = (sbyte)cameFromFace
+                        CameFromFace = (sbyte)Chunk.OppositeFace(face),
+                        TraversedDirs = newDirs
                     };
                     queue.Enqueue(neighborStep);
                 }
