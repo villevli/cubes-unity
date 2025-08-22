@@ -247,9 +247,22 @@ namespace Cubes
                     blockStateCount++;
             }
 
+            int firstPaletteIdx = 0;
+
             // If more than one block was used, use full palette so we don't have to modify the block data
             if (blockStateCount > 1)
+            {
                 blockStateCount = palette.Length;
+            }
+            // No blocks generated? Ensure we still always have a palette of length 1
+            else if (blockStateCount == 0)
+            {
+                blockStateCount = 1;
+            }
+            else
+            {
+                firstPaletteIdx = blockBuffer[0];
+            }
 
             if (!chunk.Palette.IsCreated || chunk.Palette.Length != blockStateCount)
             {
@@ -272,7 +285,7 @@ namespace Cubes
             }
             else
             {
-                chunk.Palette[0] = palette[blockBuffer[0]];
+                chunk.Palette[0] = palette[firstPaletteIdx];
 
                 chunk.Blocks.Dispose();
                 chunk.Blocks = default;
