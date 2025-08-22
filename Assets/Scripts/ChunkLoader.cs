@@ -118,7 +118,13 @@ namespace Cubes
             {
                 Profiler.BeginSample("SubmitVisibleMeshes");
                 // FIXME: This is not practical due to the overhead. Use BatchRenderGroup?
-                RenderParams rparams = new(_atlasMaterial);
+                // FIXME: Shadows don't work properly. Shadow map rendering should be culled separately
+                RenderParams rparams = new(_atlasMaterial)
+                {
+                    instanceID = GetInstanceID(),
+                    receiveShadows = false,
+                    shadowCastingMode = ShadowCastingMode.Off
+                };
                 if (_cullChunks)
                 {
                     var visibleSpan = _visibleChunks.AsReadOnlySpan()[..VisibleChunks];
