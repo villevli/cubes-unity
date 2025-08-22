@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -36,20 +37,19 @@ namespace Cubes
         [SerializeField]
         private Texture2D[] _blockTextures = { null, null };
 
-        private Texture2D Atlas;
-        private Material AtlasMaterial;
+        private Texture2D _atlasTex;
+        private Material _atlasMaterial;
 
-        private NativeArray<BlockType> BlockTypes;
+        private NativeArray<BlockType> _blockTypes;
 
-        private struct LoadedChunk
+        private struct RenderedChunk
         {
-            public Chunk chunk;
             public GameObject go;
             public Mesh mesh;
         }
 
-        private List<LoadedChunk> Chunks = new();
-        private NativeParallelHashMap<int3, Chunk> ChunkMap;
+        private Dictionary<int3, RenderedChunk> _renderedChunks = new();
+        private NativeParallelHashMap<int3, Chunk> _chunkMap;
 
         private bool _isDirty;
 
@@ -105,69 +105,91 @@ namespace Cubes
             TimerResults timers = new();
             var totalTime = new TimerScope("total", null);
 
-            if (Atlas == null)
+            if (_atlasTex == null)
             {
                 CreateBlockTypesAtlas();
             }
 
+            if (!_chunkMap.IsCreated)
+            {
+                _chunkMap = new(4096, Allocator.Persistent);
+            }
+
+            NativeArray<Chunk> chunksBuf;
             GenerateBlocks generateBlocks;
             GenerateBlocksGPU generateBlocksGPU;
             CreateMesh createMesh;
             using (new TimerScope("buffers", timers))
             {
+                chunksBuf = new(4096, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
                 generateBlocks = new GenerateBlocks(Allocator.Temp);
                 generateBlocksGPU = new GenerateBlocksGPU(Allocator.Temp);
                 createMesh = new CreateMesh(Allocator.Temp);
             }
 
+            NativeArray<Chunk> chunks;
             using (new TimerScope("create", timers))
             {
-                if (Chunks.Count == 0)
-                {
-                    ChunkMap = new(1024, Allocator.Persistent);
-                    CreateChunks();
-                }
+                int chunkCount = 0;
+                CreateChunks(_viewDistance, ref chunksBuf, ref chunkCount);
+                chunks = chunksBuf.GetSubArray(0, chunkCount);
             }
 
             if (_useGPUCompute && GenerateBlocksGPU.IsTypeSupported(_generator))
             {
-                GenerateChunksOnGPU(Chunks, ref generateBlocksGPU, _generator, timers);
+                GenerateChunksOnGPU(chunks, ref generateBlocksGPU, _generator, timers);
             }
             else if (_useMultipleThreads)
             {
-                GenerateChunksMultithreaded(Chunks, _generator, timers);
+                GenerateChunksMultithreaded(chunks, _generator, timers);
             }
             else
             {
-                GenerateChunks(Chunks, ref generateBlocks, _generator, timers);
+                GenerateChunks(chunks, ref generateBlocks, _generator, timers);
             }
 
-            CreateChunkMeshes(Chunks, ref createMesh, timers);
+            using (new TimerScope("fill", timers))
+            {
+                CullChunks.CalculateConnectedFaces(chunks);
+            }
+
+            using (new TimerScope("map", timers))
+            {
+                Span<Chunk> span = chunks;
+                for (int i = 0; i < span.Length; i++)
+                {
+                    ref var chunk = ref span[i];
+                    _chunkMap[chunk.Position] = chunk;
+                }
+            }
+
+            CreateChunkMeshes(chunks, ref createMesh, timers);
 
             var totalMs = totalTime.ResultToString();
             if (!_isDirty)
-                Debug.Log(Invariant($"Loaded {Chunks.Count} chunks in {totalMs}. {GetLoadedChunkStats()}, {timers}"));
+                Debug.Log(Invariant($"Loaded {chunks.Length} chunks in {totalMs}. {GetLoadedChunkStats(chunks)}, {timers}"));
             _isDirty = false;
 
+            chunksBuf.Dispose();
             generateBlocks.Dispose();
             generateBlocksGPU.Dispose();
             createMesh.Dispose();
         }
 
-        private string GetLoadedChunkStats()
+        private string GetLoadedChunkStats(in NativeArray<Chunk> chunks)
         {
             long blocks = 0;
             long meshes = 0;
             long verts = 0;
             long indices = 0;
-            foreach (var chunk in Chunks)
+            for (int i = 0; i < chunks.Length; i++)
             {
-                blocks += chunk.chunk.Blocks.Length;
-                if (chunk.mesh != null)
+                blocks += chunks[i].Blocks.Length;
+                if (_renderedChunks.TryGetValue(chunks[i].Position, out var rchunk) && rchunk.mesh is not null)
                 {
                     meshes++;
-                    verts += chunk.mesh.vertexCount;
-                    indices += chunk.mesh.GetIndexCount(0);
+                    verts += rchunk.mesh.vertexCount;
+                    indices += rchunk.mesh.GetIndexCount(0);
                 }
             }
             return $"{blocks} blocks, {meshes} meshes, {verts} verts, {indices} indices";
@@ -175,17 +197,22 @@ namespace Cubes
 
         private void Unload()
         {
-            foreach (var chunk in Chunks)
+            foreach (var chunk in _renderedChunks)
             {
-                DestroyImmediate(chunk.mesh);
-                DestroyImmediate(chunk.go);
-                chunk.chunk.Dispose();
+                var rchunk = chunk.Value;
+                DestroyImmediate(rchunk.mesh);
+                DestroyImmediate(rchunk.go);
             }
-            Chunks.Clear();
-            ChunkMap.Dispose();
+            _renderedChunks.Clear();
 
-            DestroyImmediate(Atlas);
-            BlockTypes.Dispose();
+            foreach (var item in _chunkMap)
+            {
+                item.Value.Dispose();
+            }
+            _chunkMap.Dispose();
+
+            DestroyImmediate(_atlasTex);
+            _blockTypes.Dispose();
         }
 
         private void CreateBlockTypesAtlas()
@@ -198,58 +225,57 @@ namespace Cubes
 
             var rects = atlas.PackTextures(_blockTextures, 0, 16 * 256);
 
-            BlockTypes = new(rects.Length, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-            for (int i = 0; i < BlockTypes.Length; i++)
+            _blockTypes = new(rects.Length, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+            for (int i = 0; i < _blockTypes.Length; i++)
             {
-                BlockTypes[i] = new()
+                _blockTypes[i] = new()
                 {
                     TexAtlasRect = rects[i],
                 };
                 // Debug.Log($"Packed {_blockTextures[i]} into {BlockTypes[i].TexAtlasRect}");
             }
 
-            Atlas = atlas;
-            AtlasMaterial = _chunkPrefab.GetComponent<Renderer>().material;
-            AtlasMaterial.mainTexture = atlas;
+            _atlasTex = atlas;
+            _atlasMaterial = _chunkPrefab.GetComponent<Renderer>().material;
+            _atlasMaterial.mainTexture = atlas;
         }
 
-        private void CreateChunks()
+        private void CreateChunks(in int viewDistance, ref NativeArray<Chunk> result, ref int count)
         {
-            int3 viewDist = _viewDistance;
-
+            int3 viewDist = viewDistance;
+            count = 0;
             for (int y = -viewDist.y; y < viewDist.y; y++)
             {
                 for (int z = -viewDist.z; z < viewDist.z; z++)
                 {
                     for (int x = -viewDist.x; x < viewDist.x; x++)
                     {
-                        // Do not allocate block data at this point. Only when known if chunk has more than one block type
-                        var chunk = new Chunk(new(x, y, z));
-                        Chunks.Add(new()
+                        var p = new int3(x, y, z);
+                        if (!_chunkMap.TryGetValue(p, out var chunk))
                         {
-                            chunk = chunk
-                        });
-                        ChunkMap.Add(chunk.Position, chunk);
+                            chunk = new Chunk(p);
+                            _chunkMap.Add(p, chunk);
+                        }
+
+                        result[count++] = chunk;
                     }
                 }
             }
         }
 
-        private void GenerateChunks(List<LoadedChunk> chunks, ref GenerateBlocks generateBlocks, in GenerateBlocks.Params p, TimerResults timers)
+        private void GenerateChunks(in NativeArray<Chunk> chunks, ref GenerateBlocks generateBlocks, in GenerateBlocks.Params p, TimerResults timers)
         {
             using (new TimerScope("gen", timers))
             {
-                for (int i = 0; i < chunks.Count; i++)
+                Span<Chunk> span = chunks;
+                for (int i = 0; i < span.Length; i++)
                 {
-                    var chunk = chunks[i];
-                    GenerateBlocks.Run(ref chunk.chunk, ref generateBlocks, p);
-                    chunks[i] = chunk;
-                    ChunkMap[chunk.chunk.Position] = chunk.chunk;
+                    GenerateBlocks.Run(ref span[i], ref generateBlocks, p);
                 }
             }
         }
 
-        private void GenerateChunksMultithreaded(List<LoadedChunk> chunks, GenerateBlocks.Params p, TimerResults timers)
+        private void GenerateChunksMultithreaded(in NativeArray<Chunk> chunks, GenerateBlocks.Params p, TimerResults timers)
         {
             const int threads = 8;
 
@@ -259,17 +285,16 @@ namespace Cubes
 
                 for (int i = 0; i < threads; i++)
                 {
-                    int count = chunks.Count / threads;
+                    int count = chunks.Length / threads;
                     int startIndex = i * count;
+                    var tchunks = chunks;
                     tasks[i] = Task.Run(() =>
                     {
                         var buffers = new GenerateBlocks(Allocator.TempJob);
+                        Span<Chunk> span = tchunks;
                         for (int i = startIndex; i < startIndex + count; i++)
                         {
-                            var chunk = chunks[i];
-                            GenerateBlocks.Run(ref chunk.chunk, ref buffers, p);
-                            chunks[i] = chunk;
-                            ChunkMap[chunk.chunk.Position] = chunk.chunk;
+                            GenerateBlocks.Run(ref span[i], ref buffers, p);
                         }
                         buffers.Dispose();
                     });
@@ -279,40 +304,24 @@ namespace Cubes
             }
         }
 
-        private void GenerateChunksOnGPU(List<LoadedChunk> chunks, ref GenerateBlocksGPU generateBlocks, in GenerateBlocks.Params p, TimerResults timers)
+        private void GenerateChunksOnGPU(in NativeArray<Chunk> chunks, ref GenerateBlocksGPU generateBlocks, in GenerateBlocks.Params p, TimerResults timers)
         {
-            var chunksArray = new NativeArray<Chunk>(chunks.Count, Allocator.Temp);
+            GenerateBlocksGPU.Run(chunks, ref generateBlocks, p, _procGenShader, timers);
+        }
 
-            for (int i = 0; i < chunks.Count; i++)
+        private void CreateChunkMeshes(in NativeArray<Chunk> chunks, ref CreateMesh createMesh, TimerResults timers)
+        {
+            for (int i = 0; i < chunks.Length; i++)
             {
-                chunksArray[i] = chunks[i].chunk;
-            }
-
-            GenerateBlocksGPU.Run(ref chunksArray, ref generateBlocks, p, _procGenShader, timers);
-
-            for (int i = 0; i < chunks.Count; i++)
-            {
-                var chunk = chunks[i];
-                chunk.chunk = chunksArray[i];
-                chunks[i] = chunk;
-
-                ChunkMap[chunk.chunk.Position] = chunk.chunk;
+                CreateChunkMesh(chunks[i], ref createMesh, timers);
             }
         }
 
-        private void CreateChunkMeshes(List<LoadedChunk> chunks, ref CreateMesh createMesh, TimerResults timers)
-        {
-            for (int i = 0; i < chunks.Count; i++)
-            {
-                chunks[i] = CreateChunkMesh(chunks[i], ref createMesh, timers);
-            }
-        }
-
-        private LoadedChunk CreateChunkMesh(LoadedChunk chunk, ref CreateMesh createMesh, TimerResults timers)
+        private void CreateChunkMesh(in Chunk chunk, ref CreateMesh createMesh, TimerResults timers)
         {
             using (new TimerScope("mesh", timers))
             {
-                CreateMesh.Run(chunk.chunk, ChunkMap, BlockTypes, ref createMesh, _createMesh);
+                CreateMesh.Run(chunk, _chunkMap, _blockTypes, ref createMesh, _createMesh);
             }
 
             Mesh.MeshDataArray dataArray = default;
@@ -327,7 +336,10 @@ namespace Cubes
                 }
             }
 
-            Mesh mesh = chunk.mesh;
+            if (!_renderedChunks.TryGetValue(chunk.Position, out var rchunk))
+                rchunk = new();
+
+            Mesh mesh = rchunk.mesh;
 
             using (new TimerScope("newmesh", timers))
             {
@@ -341,7 +353,7 @@ namespace Cubes
                     mesh = new();
                     mesh.name = "Chunk";
                 }
-                chunk.mesh = mesh;
+                rchunk.mesh = mesh;
             }
             using (new TimerScope("apply", timers))
             {
@@ -365,7 +377,7 @@ namespace Cubes
                 }
             }
 
-            GameObject go = chunk.go;
+            GameObject go = rchunk.go;
 
             using (new TimerScope("go", timers))
             {
@@ -377,15 +389,15 @@ namespace Cubes
                 else if (go == null)
                 {
                     go = Instantiate(_chunkPrefab);
-                    go.name = "Chunk" + chunk.chunk;
+                    go.name = "Chunk" + chunk;
                 }
-                chunk.go = go;
+                rchunk.go = go;
             }
             using (new TimerScope("pos", timers))
             {
                 if (go is not null)
                 {
-                    go.transform.position = (float3)(chunk.chunk.Position * Chunk.Size);
+                    go.transform.position = (float3)(chunk.Position * Chunk.Size);
                     go.transform.localScale = (float3)(Chunk.Size * 255 / 128f);
                 }
             }
@@ -396,7 +408,8 @@ namespace Cubes
                     go.GetComponent<MeshFilter>().mesh = mesh;
                 }
             }
-            return chunk;
+
+            _renderedChunks[chunk.Position] = rchunk;
         }
     }
 }

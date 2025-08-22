@@ -38,7 +38,7 @@ namespace Cubes
         /// </summary>
         /// <param name="chunks"></param>
         [BurstCompile]
-        public static void CalculateConnectedFaces(ref NativeArray<Chunk> chunks)
+        public static void CalculateConnectedFaces(in NativeArray<Chunk> chunks)
         {
             // https://tomcc.github.io/2014/08/31/visibility-1.html
             const int size = Chunk.Size;

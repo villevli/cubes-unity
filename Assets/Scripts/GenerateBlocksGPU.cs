@@ -68,9 +68,9 @@ namespace Cubes
             return p;
         }
 
-        public static void Run(ref NativeArray<Chunk> chunks, ref GenerateBlocksGPU buffers, GenerateBlocks.Params p, ComputeShader shader, TimerResults timers)
+        public static void Run(in NativeArray<Chunk> chunks, ref GenerateBlocksGPU buffers, GenerateBlocks.Params p, ComputeShader shader, TimerResults timers)
         {
-            Dispatch(ref chunks, ref buffers, p, shader, timers);
+            Dispatch(chunks, ref buffers, p, shader, timers);
 
             using (new TimerScope("readback", timers))
             {
@@ -80,14 +80,14 @@ namespace Cubes
 
             using (new TimerScope("copy", timers))
             {
-                CopyResultToChunks(ref chunks, buffers.ResultReadbackBuffer);
+                CopyResultToChunks(chunks, buffers.ResultReadbackBuffer);
             }
         }
 
         public static async Awaitable RunAsync(NativeArray<Chunk> chunks, GenerateBlocksGPU buffers, GenerateBlocks.Params p, ComputeShader shader, CancellationToken cancellationToken)
         {
             Profiler.BeginSample("Dispatch");
-            Dispatch(ref chunks, ref buffers, p, shader, null);
+            Dispatch(chunks, ref buffers, p, shader, null);
             Profiler.EndSample();
 
             await AsyncGPUReadback.RequestIntoNativeArrayAsync(ref buffers.ResultReadbackBuffer, buffers.ResultCBuffer, chunks.Length * size * size * size, 0);
@@ -95,11 +95,11 @@ namespace Cubes
                 return;
 
             Profiler.BeginSample("CopyResultToChunks");
-            CopyResultToChunks(ref chunks, buffers.ResultReadbackBuffer);
+            CopyResultToChunks(chunks, buffers.ResultReadbackBuffer);
             Profiler.EndSample();
         }
 
-        public static void Dispatch(ref NativeArray<Chunk> chunks, ref GenerateBlocksGPU buffers, GenerateBlocks.Params p, ComputeShader shader, TimerResults timers)
+        public static void Dispatch(in NativeArray<Chunk> chunks, ref GenerateBlocksGPU buffers, GenerateBlocks.Params p, ComputeShader shader, TimerResults timers)
         {
             using (new TimerScope("write", timers))
             {
@@ -127,7 +127,7 @@ namespace Cubes
         }
 
         [BurstCompile]
-        private static void CopyResultToChunks(ref NativeArray<Chunk> chunks, in NativeArray<int> result)
+        private static void CopyResultToChunks(in NativeArray<Chunk> chunks, in NativeArray<int> result)
         {
             var cspan = chunks.AsSpan();
             var fullResult = result.Reinterpret<byte>(4);

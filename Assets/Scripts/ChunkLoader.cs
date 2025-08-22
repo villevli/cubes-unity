@@ -320,7 +320,7 @@ namespace Cubes
                     using (new BackgroundTaskScope(this))
                     {
                         Profiler.BeginSample("CalculateConnectedFaces");
-                        CullChunks.CalculateConnectedFaces(ref chunksToLoad);
+                        CullChunks.CalculateConnectedFaces(chunksToLoad);
                         Profiler.EndSample();
                     }
                     await Awaitable.MainThreadAsync();
