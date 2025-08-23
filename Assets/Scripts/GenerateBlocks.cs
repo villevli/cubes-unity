@@ -47,6 +47,8 @@ namespace Cubes
 
         private NativeArray<byte> BlockBuffer;
 
+        public bool IsCreated => BlockBuffer.IsCreated;
+
         public GenerateBlocks(Allocator allocator)
         {
             BlockBuffer = new(size * size * size, allocator, NativeArrayOptions.UninitializedMemory);
@@ -267,7 +269,7 @@ namespace Cubes
             if (!chunk.Palette.IsCreated || chunk.Palette.Length != blockStateCount)
             {
                 chunk.Palette.Dispose();
-                chunk.Palette = new(blockStateCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+                chunk.Palette = NativeCollectionsUtility.CreateUnsafeNativeArray<int>(blockStateCount, Allocator.Persistent);
             }
 
             if (blockStateCount > 1)
@@ -279,7 +281,7 @@ namespace Cubes
 
                 if (!chunk.Blocks.IsCreated)
                 {
-                    chunk.Blocks = new(size * size * size, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+                    chunk.Blocks = NativeCollectionsUtility.CreateUnsafeNativeArray<byte>(size * size * size, Allocator.Persistent);
                 }
                 blockBuffer.CopyTo(chunk.Blocks);
             }

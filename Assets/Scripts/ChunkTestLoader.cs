@@ -2,9 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Unity.Burst;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
+using Unity.Jobs;
+using Unity.Jobs.LowLevel.Unsafe;
 using Unity.Mathematics;
 using UnityEngine;
+using UnityEngine.Profiling;
 using UnityEngine.Rendering;
 using static System.FormattableString;
 
@@ -24,6 +29,8 @@ namespace Cubes
 
         [SerializeField]
         private bool _useMultipleThreads = true;
+        [SerializeField]
+        private bool _useJobs = true;
 
         [SerializeField]
         private bool _useGPUCompute = true;
@@ -138,6 +145,10 @@ namespace Cubes
             if (_useGPUCompute && GenerateBlocksGPU.IsTypeSupported(_generator))
             {
                 GenerateChunksOnGPU(chunks, ref generateBlocksGPU, _generator, timers);
+            }
+            else if (_useJobs)
+            {
+                GenerateChunksJobified(chunks, _generator, timers);
             }
             else if (_useMultipleThreads)
             {
@@ -277,7 +288,7 @@ namespace Cubes
 
         private void GenerateChunksMultithreaded(in NativeArray<Chunk> chunks, GenerateBlocks.Params p, TimerResults timers)
         {
-            const int threads = 8;
+            const int threads = 16;
 
             using (new TimerScope("gen", timers))
             {
@@ -290,6 +301,7 @@ namespace Cubes
                     var tchunks = chunks;
                     tasks[i] = Task.Run(() =>
                     {
+                        Profiler.BeginSample("GenerateChunksMultithreaded");
                         var buffers = new GenerateBlocks(Allocator.TempJob);
                         Span<Chunk> span = tchunks;
                         for (int i = startIndex; i < startIndex + count; i++)
@@ -297,10 +309,45 @@ namespace Cubes
                             GenerateBlocks.Run(ref span[i], ref buffers, p);
                         }
                         buffers.Dispose();
+                        Profiler.EndSample();
                     });
                 }
 
                 Task.WaitAll(tasks);
+            }
+        }
+
+        [BurstCompile]
+        private struct GenerateParallelJob : IJobParallelFor
+        {
+            [NativeDisableContainerSafetyRestriction]
+            public NativeArray<Chunk> chunks;
+            public GenerateBlocks.Params p;
+
+            [NativeDisableContainerSafetyRestriction]
+            private GenerateBlocks _buffers;
+
+            public void Execute(int index)
+            {
+                // One buffer is created per job worker thread as each thread has it's own copy of this struct
+                if (!_buffers.IsCreated)
+                    _buffers = new GenerateBlocks(Allocator.Temp);
+
+                var chunk = chunks[index];
+                GenerateBlocks.Run(ref chunk, ref _buffers, p);
+                chunks[index] = chunk;
+            }
+        }
+
+        private void GenerateChunksJobified(in NativeArray<Chunk> chunks, GenerateBlocks.Params p, TimerResults timers)
+        {
+            using (new TimerScope("gen", timers))
+            {
+                new GenerateParallelJob()
+                {
+                    chunks = chunks,
+                    p = p
+                }.Schedule(chunks.Length, 8).Complete();
             }
         }
 
