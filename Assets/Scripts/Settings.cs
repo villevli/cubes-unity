@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace Cubes
 {
@@ -15,6 +16,9 @@ namespace Cubes
             {
                 Application.targetFrameRate = 60;
             }
+
+            // Fix issue where input actions are not registered when domain reload is disabled
+            InputSystem.actions.Enable();
         }
     }
 }
