@@ -57,6 +57,7 @@ namespace Cubes
         private Dictionary<int3, RenderedChunk> _renderedChunks = new();
         private NativeParallelHashMap<int3, Chunk> _chunkMap;
         private NativeParallelHashMap<int3, RenderableChunk> _renderMap;
+        private Stack<Mesh> _meshPool = new();
 
         private NativeArray<CullResult> _visibleChunks;
 
@@ -210,6 +211,12 @@ namespace Cubes
             _renderMap.Clear();
             MeshCount = 0;
             MeshMemoryUsedBytes = 0;
+
+            foreach (var mesh in _meshPool)
+            {
+                DestroyImmediate(mesh);
+            }
+            _meshPool.Clear();
 
             foreach (var item in _chunkMap)
             {
@@ -464,8 +471,9 @@ namespace Cubes
                     {
                         MeshCount--;
                         MeshMemoryUsedBytes -= GetSizeOfMesh(rchunk.mesh);
+
+                        _meshPool.Push(rchunk.mesh);
                     }
-                    DestroyImmediate(rchunk.mesh);
                     rchunk.mesh = null;
                     DestroyImmediate(rchunk.go);
                     rchunk.go = null;
@@ -587,7 +595,7 @@ namespace Cubes
                         MeshCount--;
                         MeshMemoryUsedBytes -= GetSizeOfMesh(rchunk.mesh);
 
-                        DestroyImmediate(rchunk.mesh);
+                        _meshPool.Push(rchunk.mesh);
                         rchunk.mesh = null;
                         _renderedChunks[chunks[i].Position] = rchunk;
                         _renderMap[chunks[i].Position] = new()
@@ -657,8 +665,11 @@ namespace Cubes
                 if (mesh == null)
                 {
                     Profiler.BeginSample("NewMesh");
-                    mesh = new();
-                    mesh.name = "Chunk";
+                    if (!_meshPool.TryPop(out mesh))
+                    {
+                        mesh = new();
+                        mesh.name = "Chunk";
+                    }
                     Profiler.EndSample();
                 }
                 rchunk.mesh = mesh;
@@ -696,7 +707,7 @@ namespace Cubes
 
                 if (rchunk.mesh?.vertexCount == 0)
                 {
-                    DestroyImmediate(rchunk.mesh);
+                    _meshPool.Push(rchunk.mesh);
                     rchunk.mesh = null;
                 }
 
