@@ -766,9 +766,12 @@ namespace Cubes
 
         private static long GetSizeOfMesh(Mesh mesh)
         {
-            return mesh is null ? 0 :
-                   mesh.vertexCount * CreateMesh.SizeOfVertex
-                 + mesh.GetIndexCount(0) * CreateMesh.SizeOfIndex;
+            if (mesh is null)
+                return 0;
+            long size = mesh.vertexCount * CreateMesh.SizeOfVertex;
+            for (int i = 0; i < mesh.subMeshCount; i++)
+                size += mesh.GetIndexCount(i) * CreateMesh.SizeOfIndex;
+            return size;
         }
     }
 }
