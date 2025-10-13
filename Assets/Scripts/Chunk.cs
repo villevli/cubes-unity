@@ -50,6 +50,9 @@ namespace Cubes
         [MarshalAs(UnmanagedType.U1)]
         public bool IsPendingUpdate;
 
+        [MarshalAs(UnmanagedType.U1)]
+        public bool IsInViewDistance;
+
         /// <summary>
         /// 15 bits that tell which combinations of 2 faces can see each other via non opaque blocks inside the chunk.
         /// 
@@ -138,6 +141,7 @@ namespace Cubes
             Blocks = default;
             Palette = default;
             IsPendingUpdate = false;
+            IsInViewDistance = false;
             ConnectedFaces = ~0;
         }
 

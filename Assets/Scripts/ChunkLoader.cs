@@ -64,6 +64,7 @@ namespace Cubes
         private int _backgroundTaskCount = 0;
 
         private int3 _lastChunkPos = int.MinValue;
+        private bool _isUpdatingChunks = false;
 
         public int TrackedChunkCount => _chunkMap.IsCreated ? _chunkMap.Count() : 0;
         public int LoadedChunkCount { get; private set; }
@@ -95,7 +96,7 @@ namespace Cubes
         {
             var camPos = Camera.main.transform.position;
             int3 currentChunkPos = (int3)math.floor((float3)camPos / Chunk.Size);
-            if (!_lastChunkPos.Equals(currentChunkPos))
+            if (!_lastChunkPos.Equals(currentChunkPos) && !_isUpdatingChunks)
             {
                 _lastChunkPos = currentChunkPos;
                 Profiler.BeginSample("UpdateChunksInRange");
@@ -273,7 +274,20 @@ namespace Cubes
             _atlasMaterial.mainTexture = atlas;
         }
 
-        private async void UpdateChunksInRange(int3 currentChunkPos, CancellationToken cancellationToken) => await UpdateChunksInRangeAsync(currentChunkPos, cancellationToken);
+        private async void UpdateChunksInRange(int3 currentChunkPos, CancellationToken cancellationToken)
+        {
+            if (_isUpdatingChunks)
+                throw new InvalidOperationException("_isUpdatingChunks must be false");
+            try
+            {
+                _isUpdatingChunks = true;
+                await UpdateChunksInRangeAsync(currentChunkPos, cancellationToken);
+            }
+            finally
+            {
+                _isUpdatingChunks = false;
+            }
+        }
 
         private async Awaitable UpdateChunksInRangeAsync(int3 currentChunkPos, CancellationToken cancellationToken)
         {
@@ -292,7 +306,9 @@ namespace Cubes
             await Awaitable.BackgroundThreadAsync();
             using (new BackgroundTaskScope(this))
             {
-                // TODO: Unload chunks that are out of range
+                Profiler.BeginSample("ResetChunkFlags");
+                ResetChunkFlags(ref _chunkMap);
+                Profiler.EndSample();
 
                 Profiler.BeginSample("FindChunksToLoad");
                 FindChunksToLoad(ref _chunkMap, currentChunkPos, viewDist, ref chunksToLoadBuf, ref chunksToLoadCount, ref chunksToRenderBuf, ref chunksToRenderCount);
@@ -305,6 +321,10 @@ namespace Cubes
                 chunksToRenderBuf.Dispose();
                 return;
             }
+
+            Profiler.BeginSample("UnloadOutOfRangeChunks");
+            UnloadOutOfRangeChunks();
+            Profiler.EndSample();
 
             if (chunksToLoadCount > 0)
             {
@@ -365,6 +385,15 @@ namespace Cubes
         }
 
         [BurstCompile]
+        private static void ResetChunkFlags(ref NativeParallelHashMap<int3, Chunk> chunkMap)
+        {
+            foreach (var item in chunkMap)
+            {
+                item.Value.IsInViewDistance = false;
+            }
+        }
+
+        [BurstCompile]
         private static void FindChunksToLoad(
             ref NativeParallelHashMap<int3, Chunk> chunkMap, in int3 currentChunkPos, in int3 viewDist,
             ref NativeArray<Chunk> chunksToLoad, ref int chunksToLoadCount,
@@ -392,10 +421,11 @@ namespace Cubes
                         if (!chunkMap.TryGetValue(p, out var chunk))
                             chunk = new Chunk(p);
 
+                        chunk.IsInViewDistance = true;
+
                         if (!chunk.IsLoaded && !chunk.IsPendingUpdate)
                         {
                             chunk.IsPendingUpdate = true;
-                            chunkMap[p] = chunk;
                             chunksToLoad[chunksToLoadCount++] = chunk;
 
                             // Update the mesh of neighboring chunks if they have been loaded already
@@ -406,11 +436,56 @@ namespace Cubes
                             CheckNeighbor(p + new int3(0, 0, -1));
                             CheckNeighbor(p + new int3(0, 0, 1));
                         }
+
+                        chunkMap[p] = chunk;
                     }
                 }
             }
 
             chunksToRenderCount = renderCount;
+        }
+
+        private void UnloadOutOfRangeChunks()
+        {
+            var toRemove = new NativeArray<int3>(_chunkMap.Count(), Allocator.Temp);
+            int toRemoveCount = 0;
+
+            foreach (var item in _chunkMap)
+            {
+                var pos = item.Key;
+                ref var chunk = ref item.Value;
+
+                if (chunk.IsInViewDistance)
+                    continue;
+
+                if (_renderedChunks.TryGetValue(pos, out var rchunk))
+                {
+                    if (rchunk.mesh is not null)
+                    {
+                        MeshCount--;
+                        MeshMemoryUsedBytes -= GetSizeOfMesh(rchunk.mesh);
+                    }
+                    DestroyImmediate(rchunk.mesh);
+                    rchunk.mesh = null;
+                    DestroyImmediate(rchunk.go);
+                    rchunk.go = null;
+                }
+
+                _renderMap.Remove(pos);
+
+                LoadedChunkCount -= chunk.IsLoaded ? 1 : 0;
+                BlocksInMemoryCount -= chunk.Blocks.Length;
+                chunk.Dispose();
+
+                toRemove[toRemoveCount++] = pos;
+            }
+
+            foreach (var item in toRemove.GetSubArray(0, toRemoveCount))
+            {
+                _renderedChunks.Remove(item);
+                _chunkMap.Remove(item);
+            }
+            toRemove.Dispose();
         }
 
         private Awaitable GenerateChunksAsync(NativeArray<Chunk> chunks, CancellationToken cancellationToken)
