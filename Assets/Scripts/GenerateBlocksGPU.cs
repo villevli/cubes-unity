@@ -68,7 +68,7 @@ namespace Cubes
             return p;
         }
 
-        public static void Run(in NativeArray<Chunk> chunks, ref GenerateBlocksGPU buffers, GenerateBlocks.Params p, ComputeShader shader, TimerResults timers)
+        public static void Run(in NativeArray<Chunk> chunks, ref GenerateBlocksGPU buffers, GenerateBlocks.Params p, ComputeShader shader, in ChunkDataPool pool, TimerResults timers)
         {
             Dispatch(chunks, ref buffers, p, shader, timers);
 
@@ -80,11 +80,11 @@ namespace Cubes
 
             using (new TimerScope("copy", timers))
             {
-                CopyResultToChunks(chunks, buffers.ResultReadbackBuffer);
+                CopyResultToChunks(chunks, pool, buffers.ResultReadbackBuffer);
             }
         }
 
-        public static async Awaitable RunAsync(NativeArray<Chunk> chunks, GenerateBlocksGPU buffers, GenerateBlocks.Params p, ComputeShader shader, CancellationToken cancellationToken)
+        public static async Awaitable RunAsync(NativeArray<Chunk> chunks, GenerateBlocksGPU buffers, GenerateBlocks.Params p, ComputeShader shader, ChunkDataPool pool, CancellationToken cancellationToken)
         {
             Profiler.BeginSample("Dispatch");
             Dispatch(chunks, ref buffers, p, shader, null);
@@ -95,7 +95,7 @@ namespace Cubes
                 return;
 
             Profiler.BeginSample("CopyResultToChunks");
-            CopyResultToChunks(chunks, buffers.ResultReadbackBuffer);
+            CopyResultToChunks(chunks, pool, buffers.ResultReadbackBuffer);
             Profiler.EndSample();
         }
 
@@ -127,7 +127,7 @@ namespace Cubes
         }
 
         [BurstCompile]
-        private static void CopyResultToChunks(in NativeArray<Chunk> chunks, in NativeArray<int> result)
+        private static void CopyResultToChunks(in NativeArray<Chunk> chunks, in ChunkDataPool pool, in NativeArray<int> result)
         {
             var cspan = chunks.AsSpan();
             var fullResult = result.Reinterpret<byte>(4);
@@ -165,7 +165,7 @@ namespace Cubes
 
                     if (!chunk.Blocks.IsCreated)
                     {
-                        chunk.Blocks = new(size * size * size, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+                        chunk.Blocks = pool.AllocateChunkBlocks();
                     }
                     chunkResult.CopyTo(chunk.Blocks);
                 }
@@ -173,7 +173,7 @@ namespace Cubes
                 {
                     chunk.Palette[0] = blockType;
 
-                    chunk.Blocks.Dispose();
+                    pool.DeallocateChunkBlocks(chunk.Blocks);
                     chunk.Blocks = default;
                 }
             }

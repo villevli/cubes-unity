@@ -353,7 +353,7 @@ namespace Cubes
 
         private void GenerateChunksOnGPU(in NativeArray<Chunk> chunks, ref GenerateBlocksGPU generateBlocks, in GenerateBlocks.Params p, TimerResults timers)
         {
-            GenerateBlocksGPU.Run(chunks, ref generateBlocks, p, _procGenShader, timers);
+            GenerateBlocksGPU.Run(chunks, ref generateBlocks, p, _procGenShader, default, timers);
         }
 
         private void CreateChunkMeshes(in NativeArray<Chunk> chunks, ref CreateMesh createMesh, TimerResults timers)

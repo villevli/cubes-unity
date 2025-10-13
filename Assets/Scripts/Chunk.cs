@@ -186,4 +186,41 @@ namespace Cubes
             return blocks[y * Size * Size + z * Size + x];
         }
     }
+
+    public struct ChunkDataPool : IDisposable
+    {
+        public NativeList<NativeArray<byte>> BlocksPool;
+
+        public ChunkDataPool(Allocator allocator)
+        {
+            BlocksPool = new(allocator);
+        }
+
+        public void Dispose()
+        {
+            foreach (var item in BlocksPool)
+            {
+                item.Dispose();
+            }
+            BlocksPool.Dispose();
+        }
+
+        public NativeArray<byte> AllocateChunkBlocks()
+        {
+            if (!BlocksPool.IsEmpty)
+            {
+                var result = BlocksPool[BlocksPool.Length - 1];
+                BlocksPool.RemoveAt(BlocksPool.Length - 1);
+                return result;
+            }
+            const int size = Chunk.Size;
+            return new(size * size * size, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        }
+
+        public void DeallocateChunkBlocks(NativeArray<byte> blocks)
+        {
+            if (blocks.IsCreated)
+                BlocksPool.Add(blocks);
+        }
+    }
 }

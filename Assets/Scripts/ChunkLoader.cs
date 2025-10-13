@@ -57,6 +57,8 @@ namespace Cubes
         private Dictionary<int3, RenderedChunk> _renderedChunks = new();
         private NativeParallelHashMap<int3, Chunk> _chunkMap;
         private NativeParallelHashMap<int3, RenderableChunk> _renderMap;
+
+        private ChunkDataPool _chunkDataPool;
         private Stack<Mesh> _meshPool = new();
 
         private NativeArray<CullResult> _visibleChunks;
@@ -175,6 +177,7 @@ namespace Cubes
             _chunkMap = new(1024, Allocator.Persistent);
             _renderMap = new(1024, Allocator.Persistent);
             _visibleChunks = new(100000, Allocator.Persistent);
+            _chunkDataPool = new(Allocator.Persistent);
 
             _cts ??= new();
             UnityEngine.Debug.Assert(_backgroundTaskCount == 0);
@@ -187,6 +190,7 @@ namespace Cubes
             _chunkMap.Dispose();
             _renderMap.Dispose();
             _visibleChunks.Dispose();
+            _chunkDataPool.Dispose();
 
             DestroyImmediate(_atlas);
             _blockTypes.Dispose();
@@ -483,6 +487,9 @@ namespace Cubes
 
                 LoadedChunkCount -= chunk.IsLoaded ? 1 : 0;
                 BlocksInMemoryCount -= chunk.Blocks.Length;
+
+                _chunkDataPool.DeallocateChunkBlocks(chunk.Blocks);
+                chunk.Blocks = default;
                 chunk.Dispose();
 
                 toRemove[toRemoveCount++] = pos;
@@ -516,7 +523,7 @@ namespace Cubes
             {
                 Profiler.BeginSample("GenerateBlocksGPU");
                 var toGenerate = chunks.GetSubArray(generated, math.min(chunks.Length - generated, GenerateBlocksGPU.MaxChunksPerDispatch));
-                var runAsync = GenerateBlocksGPU.RunAsync(toGenerate, buffers, p, _procGenShader, cancellationToken);
+                var runAsync = GenerateBlocksGPU.RunAsync(toGenerate, buffers, p, _procGenShader, _chunkDataPool, cancellationToken);
                 Profiler.EndSample();
                 await runAsync;
                 generated += toGenerate.Length;
