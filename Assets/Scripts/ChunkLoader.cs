@@ -49,15 +49,22 @@ namespace Cubes
 
         private struct RenderedChunk
         {
-            public GameObject go;
-            public Mesh mesh;
+            public UnityObjectRef<GameObject> go;
+            public UnityObjectRef<Mesh> mesh;
+            public long meshSizeBytes;
             public Matrix4x4 objectToWorld;
         }
 
-        private Dictionary<int3, RenderedChunk> _renderedChunks = new();
+        private NativeHashMap<int3, RenderedChunk> _renderedChunks;
         private NativeParallelHashMap<int3, Chunk> _chunkMap;
         private NativeParallelHashMap<int3, RenderableChunk> _renderMap;
-        private Stack<Mesh> _meshPool = new();
+        private DataPool<UnityObjectRef<Mesh>, MeshFactory> _meshPool;
+
+        readonly struct MeshFactory : IDataFactory<UnityObjectRef<Mesh>>
+        {
+            public UnityObjectRef<Mesh> Allocate() => new Mesh();
+            public void Free(in UnityObjectRef<Mesh> value) => DestroyImmediate(value);
+        }
 
         private NativeArray<CullResult> _visibleChunks;
 
@@ -68,10 +75,20 @@ namespace Cubes
         private bool _isUpdatingChunks = false;
 
         public int TrackedChunkCount => _chunkMap.IsCreated ? _chunkMap.Count() : 0;
-        public int LoadedChunkCount { get; private set; }
-        public long BlocksInMemoryCount { get; private set; }
-        public int MeshCount { get; private set; }
-        public long MeshMemoryUsedBytes { get; private set; }
+        public int LoadedChunkCount => _stats.LoadedChunkCount;
+        public long BlocksInMemoryCount => _stats.BlocksInMemoryCount;
+        public int MeshCount => _stats.MeshCount;
+        public long MeshMemoryUsedBytes => _stats.MeshMemoryUsedBytes;
+
+        private Stats _stats;
+
+        private struct Stats
+        {
+            public int LoadedChunkCount;
+            public long BlocksInMemoryCount;
+            public int MeshCount;
+            public long MeshMemoryUsedBytes;
+        }
 
         public int LastChunksLoadedCount { get; private set; }
         public int LastChunksRenderedCount { get; private set; }
@@ -132,7 +149,7 @@ namespace Cubes
                     var visibleSpan = _visibleChunks.AsReadOnlySpan()[..VisibleChunks];
                     for (int i = 0; i < visibleSpan.Length; i++)
                     {
-                        if (_renderedChunks.TryGetValue(visibleSpan[i].Pos, out var rchunk) && rchunk.mesh is not null)
+                        if (_renderedChunks.TryGetValue(visibleSpan[i].Pos, out var rchunk) && rchunk.mesh != default)
                             Graphics.RenderMesh(rparams, rchunk.mesh, 0, rchunk.objectToWorld);
                     }
                 }
@@ -141,7 +158,7 @@ namespace Cubes
                     foreach (var item in _renderedChunks)
                     {
                         var rchunk = item.Value;
-                        if (rchunk.mesh is not null)
+                        if (rchunk.mesh != default)
                             Graphics.RenderMesh(rparams, rchunk.mesh, 0, rchunk.objectToWorld);
                     }
                 }
@@ -173,7 +190,9 @@ namespace Cubes
             CreateBlockTypesAtlas();
 
             _chunkMap = new(1024, Allocator.Persistent);
+            _renderedChunks = new(1024, Allocator.Persistent);
             _renderMap = new(1024, Allocator.Persistent);
+            _meshPool = new(Allocator.Persistent);
             _visibleChunks = new(100000, Allocator.Persistent);
 
             _cts ??= new();
@@ -185,7 +204,9 @@ namespace Cubes
             Unload();
 
             _chunkMap.Dispose();
+            _renderedChunks.Dispose();
             _renderMap.Dispose();
+            _meshPool.Dispose();
             _visibleChunks.Dispose();
 
             DestroyImmediate(_atlas);
@@ -209,13 +230,9 @@ namespace Cubes
             }
             _renderedChunks.Clear();
             _renderMap.Clear();
-            MeshCount = 0;
-            MeshMemoryUsedBytes = 0;
+            _stats.MeshCount = 0;
+            _stats.MeshMemoryUsedBytes = 0;
 
-            foreach (var mesh in _meshPool)
-            {
-                DestroyImmediate(mesh);
-            }
             _meshPool.Clear();
 
             foreach (var item in _chunkMap)
@@ -223,8 +240,8 @@ namespace Cubes
                 item.Value.Dispose();
             }
             _chunkMap.Clear();
-            LoadedChunkCount = 0;
-            BlocksInMemoryCount = 0;
+            _stats.LoadedChunkCount = 0;
+            _stats.BlocksInMemoryCount = 0;
 
             VisibleChunks = 0;
 
@@ -374,8 +391,8 @@ namespace Cubes
                     chunksToLoad[i] = chunk;
                     chunksToRenderBuf[chunksToRenderCount++] = chunk;
 
-                    LoadedChunkCount += chunk.IsLoaded ? 1 : 0;
-                    BlocksInMemoryCount += chunk.Blocks.Length;
+                    _stats.LoadedChunkCount += chunk.IsLoaded ? 1 : 0;
+                    _stats.BlocksInMemoryCount += chunk.Blocks.Length;
                 }
                 Profiler.EndSample();
 
@@ -454,10 +471,37 @@ namespace Cubes
 
         private void UnloadOutOfRangeChunks()
         {
-            var toRemove = new NativeArray<int3>(_chunkMap.Count(), Allocator.Temp);
+            var removedRChunks = _useGameObjects ? new NativeArray<RenderedChunk>(_chunkMap.Count(), Allocator.Temp) : default;
+            int removedRChunksCount = 0;
+
+            UnloadOutOfRangeChunks(_chunkMap, _renderedChunks, _renderMap, _meshPool,
+                ref _stats,
+                ref removedRChunks, ref removedRChunksCount);
+
+            if (removedRChunks.IsCreated)
+            {
+                foreach (var rchunk in removedRChunks.GetSubArray(0, removedRChunksCount))
+                {
+                    DestroyImmediate(rchunk.go);
+                }
+                removedRChunks.Dispose();
+            }
+        }
+
+        [BurstCompile]
+        private static void UnloadOutOfRangeChunks(
+            in NativeParallelHashMap<int3, Chunk> chunkMap,
+            in NativeHashMap<int3, RenderedChunk> renderedChunks,
+            in NativeParallelHashMap<int3, RenderableChunk> renderMap,
+            in DataPool<UnityObjectRef<Mesh>, MeshFactory> meshPool,
+            ref Stats stats,
+            ref NativeArray<RenderedChunk> removedRChunks, ref int removedRChunksCount
+            )
+        {
+            var toRemove = new NativeArray<int3>(chunkMap.Count(), Allocator.Temp);
             int toRemoveCount = 0;
 
-            foreach (var item in _chunkMap)
+            foreach (var item in chunkMap)
             {
                 var pos = item.Key;
                 ref var chunk = ref item.Value;
@@ -465,24 +509,27 @@ namespace Cubes
                 if (chunk.IsInViewDistance)
                     continue;
 
-                if (_renderedChunks.TryGetValue(pos, out var rchunk))
+                if (renderedChunks.TryGetValue(pos, out var rchunk))
                 {
-                    if (rchunk.mesh is not null)
+                    if (rchunk.mesh != default)
                     {
-                        MeshCount--;
-                        MeshMemoryUsedBytes -= GetSizeOfMesh(rchunk.mesh);
+                        stats.MeshCount--;
+                        stats.MeshMemoryUsedBytes -= rchunk.meshSizeBytes;
 
-                        _meshPool.Push(rchunk.mesh);
+                        meshPool.Free(rchunk.mesh);
+                        rchunk.mesh = default;
+                        rchunk.meshSizeBytes = 0;
                     }
-                    rchunk.mesh = null;
-                    DestroyImmediate(rchunk.go);
-                    rchunk.go = null;
+                    renderedChunks.Remove(pos);
+
+                    if (removedRChunks.IsCreated)
+                        removedRChunks[removedRChunksCount++] = rchunk;
                 }
 
-                _renderMap.Remove(pos);
+                renderMap.Remove(pos);
 
-                LoadedChunkCount -= chunk.IsLoaded ? 1 : 0;
-                BlocksInMemoryCount -= chunk.Blocks.Length;
+                stats.LoadedChunkCount -= chunk.IsLoaded ? 1 : 0;
+                stats.BlocksInMemoryCount -= chunk.Blocks.Length;
                 chunk.Dispose();
 
                 toRemove[toRemoveCount++] = pos;
@@ -490,8 +537,7 @@ namespace Cubes
 
             foreach (var item in toRemove.GetSubArray(0, toRemoveCount))
             {
-                _renderedChunks.Remove(item);
-                _chunkMap.Remove(item);
+                chunkMap.Remove(item);
             }
             toRemove.Dispose();
         }
@@ -590,17 +636,18 @@ namespace Cubes
                 {
                     Profiler.BeginSample("ReleaseExisting");
                     // Release possible existing mesh
-                    if (_renderedChunks.TryGetValue(chunks[i].Position, out var rchunk) && rchunk.mesh is not null)
+                    if (_renderedChunks.TryGetValue(chunks[i].Position, out var rchunk) && rchunk.mesh != default)
                     {
-                        MeshCount--;
-                        MeshMemoryUsedBytes -= GetSizeOfMesh(rchunk.mesh);
+                        _stats.MeshCount--;
+                        _stats.MeshMemoryUsedBytes -= rchunk.meshSizeBytes;
 
-                        _meshPool.Push(rchunk.mesh);
-                        rchunk.mesh = null;
+                        _meshPool.Free(rchunk.mesh);
+                        rchunk.mesh = default;
+                        rchunk.meshSizeBytes = 0;
                         _renderedChunks[chunks[i].Position] = rchunk;
                         _renderMap[chunks[i].Position] = new()
                         {
-                            MeshId = 0,
+                            MeshId = default,
                             ConnectedFaces = ~0,
                         };
                     }
@@ -654,32 +701,28 @@ namespace Cubes
                 if (!_renderedChunks.TryGetValue(chunk.Position, out var rchunk))
                     rchunk = new();
 
-                Mesh mesh = rchunk.mesh;
-
-                if (mesh is not null)
+                if (rchunk.mesh != default)
                 {
-                    MeshCount--;
-                    MeshMemoryUsedBytes -= GetSizeOfMesh(mesh);
+                    _stats.MeshCount--;
+                    _stats.MeshMemoryUsedBytes -= rchunk.meshSizeBytes;
                 }
 
+                Mesh mesh = rchunk.mesh;
                 if (mesh == null)
                 {
                     Profiler.BeginSample("NewMesh");
-                    if (!_meshPool.TryPop(out mesh))
-                    {
-                        mesh = new();
-                        mesh.name = "Chunk";
-                    }
+                    mesh = rchunk.mesh = _meshPool.Allocate();
+                    mesh.name = "Chunk";
+                    rchunk.meshSizeBytes = GetSizeOfMesh(mesh);
                     Profiler.EndSample();
                 }
-                rchunk.mesh = mesh;
                 meshes[i] = mesh;
                 _renderedChunks[chunk.Position] = rchunk;
 
                 Profiler.BeginSample("UpdateRenderHashMap");
                 _renderMap[chunks[i].Position] = new()
                 {
-                    MeshId = mesh.GetInstanceID(),
+                    MeshId = rchunk.mesh,
                     ConnectedFaces = chunk.ConnectedFaces,
                 };
                 Profiler.EndSample();
@@ -704,24 +747,28 @@ namespace Cubes
                     rchunk = new();
 
                 GameObject go = rchunk.go;
+                Mesh mesh = rchunk.mesh;
 
-                if (rchunk.mesh?.vertexCount == 0)
+                if (mesh?.vertexCount == 0)
                 {
-                    _meshPool.Push(rchunk.mesh);
-                    rchunk.mesh = null;
+                    _meshPool.Free(rchunk.mesh);
+                    rchunk.mesh = default;
+                    rchunk.meshSizeBytes = 0;
                 }
 
-                if (rchunk.mesh is null)
+                if (rchunk.mesh == default)
                 {
                     DestroyImmediate(go);
                     go = null;
                 }
                 else
                 {
-                    rchunk.mesh.bounds = rchunk.mesh.GetSubMesh(0).bounds;
+                    mesh.bounds = mesh.GetSubMesh(0).bounds;
 
-                    MeshCount++;
-                    MeshMemoryUsedBytes += GetSizeOfMesh(rchunk.mesh);
+                    rchunk.meshSizeBytes = GetSizeOfMesh(mesh);
+
+                    _stats.MeshCount++;
+                    _stats.MeshMemoryUsedBytes += rchunk.meshSizeBytes;
 
                     if (!_useGameObjects)
                     {
@@ -756,7 +803,7 @@ namespace Cubes
                 Profiler.BeginSample("UpdateRenderHashMap");
                 _renderMap[chunks[i].Position] = new()
                 {
-                    MeshId = rchunk.mesh?.GetInstanceID() ?? 0,
+                    MeshId = rchunk.mesh,
                     ConnectedFaces = chunk.ConnectedFaces,
                 };
                 Profiler.EndSample();

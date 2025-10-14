@@ -11,7 +11,7 @@ namespace Cubes
     /// </summary>
     public struct RenderableChunk
     {
-        public int MeshId;
+        public UnityObjectRef<Mesh> MeshId;
         public short ConnectedFaces;
     }
 
@@ -215,7 +215,7 @@ namespace Cubes
                 int3 pos = step.ChunkPos;
                 var chunk = step.Chunk;
 
-                if (chunk.MeshId != 0)
+                if (chunk.MeshId != default)
                 {
                     result[count++] = new()
                     {
@@ -269,7 +269,7 @@ namespace Cubes
                     {
                         neighborChunk = new()
                         {
-                            MeshId = 0,
+                            MeshId = default,
                             // Really these should be fully transparent chunks
                             // but setting to 0 prevents the search from going down over the edge of loaded chunks
                             ConnectedFaces = 0
