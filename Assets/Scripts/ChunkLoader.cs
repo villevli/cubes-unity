@@ -27,6 +27,9 @@ namespace Cubes
         [SerializeField]
         private bool _useGPUCompute = true;
         [SerializeField]
+        [Range(1, GenerateBlocksGPU.MaxChunksPerDispatch)]
+        private int _chunksPerDispatch = 512;
+        [SerializeField]
         private ComputeShader _procGenShader;
 
         [SerializeField]
@@ -556,12 +559,13 @@ namespace Cubes
 
         private async Awaitable GenerateChunksOnGPUAsync(NativeArray<Chunk> chunks, GenerateBlocks.Params p, CancellationToken cancellationToken)
         {
+            var chunksPerDispatch = math.clamp(_chunksPerDispatch, 1, GenerateBlocksGPU.MaxChunksPerDispatch);
             var buffers = new GenerateBlocksGPU(Allocator.Persistent);
             int generated = 0;
             while (!cancellationToken.IsCancellationRequested && generated < chunks.Length)
             {
                 Profiler.BeginSample("GenerateBlocksGPU");
-                var toGenerate = chunks.GetSubArray(generated, math.min(chunks.Length - generated, GenerateBlocksGPU.MaxChunksPerDispatch));
+                var toGenerate = chunks.GetSubArray(generated, math.min(chunks.Length - generated, chunksPerDispatch));
                 var runAsync = GenerateBlocksGPU.RunAsync(toGenerate, buffers, p, _procGenShader, cancellationToken);
                 Profiler.EndSample();
                 await runAsync;

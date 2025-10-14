@@ -611,6 +611,7 @@ MonoBehaviour:
     Offset2: 0
     Scale2: 1
   _useGPUCompute: 1
+  _chunksPerDispatch: 512
   _procGenShader: {fileID: 7200000, guid: 95e5007b9dc2d324c83f8edba516f11d, type: 3}
   _createMeshOptions:
     AddBorderWalls: 0
