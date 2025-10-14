@@ -616,6 +616,28 @@ namespace Cubes
             }
         }
 
+        private class TimeSlicer
+        {
+            public TimeSpan Threshold;
+
+            public int FrameNumber;
+            public long Timestamp;
+
+            public async Awaitable NextAsync()
+            {
+                while (FrameNumber == Time.frameCount && TimeSpan.FromTicks(Stopwatch.GetTimestamp() - Timestamp) > Threshold)
+                    await Awaitable.NextFrameAsync();
+                var frameNum = Time.frameCount;
+                if (FrameNumber != frameNum)
+                {
+                    FrameNumber = frameNum;
+                    Timestamp = Stopwatch.GetTimestamp();
+                }
+            }
+        }
+
+        private TimeSlicer _meshAllocTimeSlicer = new() { Threshold = TimeSpan.FromMilliseconds(1) };
+
         private async Awaitable CreateChunkMeshesAsync(NativeArray<Chunk> chunks, CancellationToken cancellationToken)
         {
             Mesh.MeshDataArray dataArray = default;
@@ -690,6 +712,9 @@ namespace Cubes
                     meshChunksBuf.Dispose();
                     return;
                 }
+
+                // Time slice to multiple frames
+                await _meshAllocTimeSlicer.NextAsync();
             }
 
             Profiler.BeginSample("AllocateMeshes");
