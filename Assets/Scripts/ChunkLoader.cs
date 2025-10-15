@@ -366,25 +366,6 @@ namespace Cubes
                     return;
                 }
 
-                if (_cullChunks)
-                {
-                    // TODO: parallel job
-                    await Awaitable.BackgroundThreadAsync();
-                    using (new BackgroundTaskScope(this))
-                    {
-                        Profiler.BeginSample("CalculateConnectedFaces");
-                        CullChunks.CalculateConnectedFaces(chunksToLoad);
-                        Profiler.EndSample();
-                    }
-                    await Awaitable.MainThreadAsync();
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        chunksToLoadBuf.Dispose();
-                        chunksToRenderBuf.Dispose();
-                        return;
-                    }
-                }
-
                 Profiler.BeginSample("MarkLoadedChunks");
                 for (int i = 0; i < chunksToLoad.Length; i++)
                 {
@@ -561,6 +542,7 @@ namespace Cubes
         {
             var chunksPerDispatch = math.clamp(_chunksPerDispatch, 1, GenerateBlocksGPU.MaxChunksPerDispatch);
             var buffers = new GenerateBlocksGPU(Allocator.Persistent);
+            var connectedFacesTasks = new List<Awaitable>();
             int generated = 0;
             while (!cancellationToken.IsCancellationRequested && generated < chunks.Length)
             {
@@ -569,9 +551,16 @@ namespace Cubes
                 var runAsync = GenerateBlocksGPU.RunAsync(toGenerate, buffers, p, _procGenShader, cancellationToken);
                 Profiler.EndSample();
                 await runAsync;
+                if (_cullChunks)
+                    connectedFacesTasks.Add(CalculateConnectedFacesAsync(toGenerate));
                 generated += toGenerate.Length;
             }
             buffers.Dispose();
+
+            foreach (var item in connectedFacesTasks)
+            {
+                await item;
+            }
         }
 
         private async Awaitable GenerateChunksCPUAsync(NativeArray<Chunk> chunks, GenerateBlocks.Params p, CancellationToken cancellationToken)
@@ -587,7 +576,9 @@ namespace Cubes
                 GenerateChunksCPU(chunks, buffers, p);
                 buffers.Dispose();
             }
-            // await Awaitable.MainThreadAsync();
+
+            if (_cullChunks)
+                await CalculateConnectedFacesAsync(chunks);
         }
 
         private void GenerateChunksCPU(NativeArray<Chunk> chunks, GenerateBlocks buffers, GenerateBlocks.Params p)
@@ -597,6 +588,17 @@ namespace Cubes
             {
                 ref var chunk = ref span[i];
                 GenerateBlocks.Run(ref chunk, ref buffers, p);
+            }
+        }
+
+        private async Awaitable CalculateConnectedFacesAsync(NativeArray<Chunk> chunks)
+        {
+            await Awaitable.BackgroundThreadAsync();
+            using (new BackgroundTaskScope(this))
+            {
+                Profiler.BeginSample("CalculateConnectedFaces");
+                CullChunks.CalculateConnectedFaces(chunks);
+                Profiler.EndSample();
             }
         }
 
