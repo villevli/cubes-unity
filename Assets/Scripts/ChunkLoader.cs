@@ -652,34 +652,7 @@ namespace Cubes
             int meshCount = 0;
 
             Profiler.BeginSample("CollectMeshChunks");
-            for (int i = 0; i < chunks.Length; i++)
-            {
-                if (CreateMesh.NeedsMesh(chunks[i]))
-                {
-                    meshChunksBuf[meshCount++] = chunks[i];
-                }
-                else
-                {
-                    Profiler.BeginSample("ReleaseExisting");
-                    // Release possible existing mesh
-                    if (_renderedChunks.TryGetValue(chunks[i].Position, out var rchunk) && rchunk.mesh != default)
-                    {
-                        _stats.MeshCount--;
-                        _stats.MeshMemoryUsedBytes -= rchunk.meshSizeBytes;
-
-                        _meshPool.Free(rchunk.mesh);
-                        rchunk.mesh = default;
-                        rchunk.meshSizeBytes = 0;
-                        _renderedChunks[chunks[i].Position] = rchunk;
-                        _renderMap[chunks[i].Position] = new()
-                        {
-                            MeshId = default,
-                            ConnectedFaces = ~0,
-                        };
-                    }
-                    Profiler.EndSample();
-                }
-            }
+            CollectMeshChunks(chunks, ref meshChunksBuf, ref meshCount);
             Profiler.EndSample();
 
             var meshChunks = meshChunksBuf.GetSubArray(0, meshCount);
@@ -692,21 +665,8 @@ namespace Cubes
                 await Awaitable.BackgroundThreadAsync();
                 using (new BackgroundTaskScope(this))
                 {
-                    Profiler.BeginSample("CreateMesh");
-                    var buffers = new CreateMesh(Allocator.Persistent);
-
-                    for (int i = 0; i < meshChunks.Length; i++)
-                    {
-                        CreateMesh.Run(meshChunks[i], _chunkMap, _blockTypes, ref buffers, _createMeshOptions);
-
-                        if (buffers.VertexCount > 0)
-                        {
-                            var meshData = dataArray[i];
-                            CreateMesh.SetMeshData(buffers, ref meshData);
-                        }
-                    }
-
-                    buffers.Dispose();
+                    Profiler.BeginSample("CreateMeshes");
+                    CreateMeshes(meshChunks, dataArray, _chunkMap, _blockTypes, _createMeshOptions);
                     Profiler.EndSample();
                 }
                 await Awaitable.MainThreadAsync();
@@ -717,15 +677,94 @@ namespace Cubes
                     return;
                 }
 
-                // Time slice to multiple frames
                 await _meshAllocTimeSlicer.NextAsync();
             }
 
             Profiler.BeginSample("AllocateMeshes");
             var meshes = new Mesh[meshChunks.Length];
+            AllocateMeshes(meshChunks, meshes);
+            Profiler.EndSample();
+
+            meshChunksBuf.Dispose();
+
+            if (meshes.Length > 0)
+            {
+                Profiler.BeginSample("ApplyAndDisposeWritableMeshData");
+                Mesh.ApplyAndDisposeWritableMeshData(dataArray, meshes, MeshUpdateFlags.DontRecalculateBounds | MeshUpdateFlags.DontValidateIndices);
+                Profiler.EndSample();
+            }
+
+            Profiler.BeginSample("ApplyMeshes");
+            ApplyMeshes(chunks);
+            Profiler.EndSample();
+        }
+
+        private void CollectMeshChunks(in NativeArray<Chunk> chunks, ref NativeArray<Chunk> meshChunksBuf, ref int meshCount)
+        {
+            CollectMeshChunks(chunks, ref meshChunksBuf, ref meshCount, ref _renderedChunks, ref _renderMap, _meshPool, ref _stats);
+        }
+
+        [BurstCompile]
+        private static void CollectMeshChunks(in NativeArray<Chunk> chunks,
+            ref NativeArray<Chunk> meshChunksBuf, ref int meshCount,
+            ref NativeHashMap<int3, RenderedChunk> renderedChunks,
+            ref NativeParallelHashMap<int3, RenderableChunk> renderMap,
+            in DataPool<UnityObjectRef<Mesh>, MeshFactory> meshPool,
+            ref Stats stats
+        )
+        {
+            foreach (ref var chunk in chunks.AsSpan())
+            {
+                if (CreateMesh.NeedsMesh(chunk))
+                {
+                    meshChunksBuf[meshCount++] = chunk;
+                }
+                else
+                {
+                    // Release possible existing mesh
+                    if (renderedChunks.TryGetValue(chunk.Position, out var rchunk) && rchunk.mesh != default)
+                    {
+                        stats.MeshCount--;
+                        stats.MeshMemoryUsedBytes -= rchunk.meshSizeBytes;
+
+                        meshPool.Free(rchunk.mesh);
+                        rchunk.mesh = default;
+                        rchunk.meshSizeBytes = 0;
+                        renderedChunks[chunk.Position] = rchunk;
+                        renderMap[chunk.Position] = new()
+                        {
+                            MeshId = default,
+                            ConnectedFaces = ~0,
+                        };
+                    }
+                }
+            }
+        }
+
+        [BurstCompile]
+        private static void CreateMeshes(in NativeArray<Chunk> meshChunks, in Mesh.MeshDataArray dataArray,
+            in NativeParallelHashMap<int3, Chunk> chunkMap, in NativeArray<BlockType> blockTypes, in CreateMesh.Params p)
+        {
+            var buffers = new CreateMesh(Allocator.Persistent);
             for (int i = 0; i < meshChunks.Length; i++)
             {
-                var chunk = meshChunks[i];
+                CreateMesh.Run(meshChunks[i], chunkMap, blockTypes, ref buffers, p);
+
+                if (buffers.VertexCount > 0)
+                {
+                    var meshData = dataArray[i];
+                    CreateMesh.SetMeshData(buffers, ref meshData);
+                }
+            }
+            buffers.Dispose();
+        }
+
+        private void AllocateMeshes(in NativeArray<Chunk> meshChunks, Mesh[] meshes)
+        {
+            var meshChunksSpan = meshChunks.AsSpan();
+            for (int i = 0; i < meshChunksSpan.Length; i++)
+            {
+                ref var chunk = ref meshChunksSpan[i];
 
                 if (!_renderedChunks.TryGetValue(chunk.Position, out var rchunk))
                     rchunk = new();
@@ -749,29 +788,19 @@ namespace Cubes
                 _renderedChunks[chunk.Position] = rchunk;
 
                 Profiler.BeginSample("UpdateRenderHashMap");
-                _renderMap[chunks[i].Position] = new()
+                _renderMap[chunk.Position] = new()
                 {
                     MeshId = rchunk.mesh,
                     ConnectedFaces = chunk.ConnectedFaces,
                 };
                 Profiler.EndSample();
             }
-            Profiler.EndSample();
+        }
 
-            meshChunksBuf.Dispose();
-
-            if (meshes.Length > 0)
+        private void ApplyMeshes(in NativeArray<Chunk> chunks)
+        {
+            foreach (ref var chunk in chunks.AsSpan())
             {
-                Profiler.BeginSample("ApplyAndDisposeWritableMeshData");
-                Mesh.ApplyAndDisposeWritableMeshData(dataArray, meshes, MeshUpdateFlags.DontRecalculateBounds | MeshUpdateFlags.DontValidateIndices);
-                Profiler.EndSample();
-            }
-
-            Profiler.BeginSample("ApplyGameObject");
-            for (int i = 0; i < chunks.Length; i++)
-            {
-                var chunk = chunks[i];
-
                 if (!_renderedChunks.TryGetValue(chunk.Position, out var rchunk))
                     rchunk = new();
 
@@ -830,14 +859,13 @@ namespace Cubes
 
                 _renderedChunks[chunk.Position] = rchunk;
                 Profiler.BeginSample("UpdateRenderHashMap");
-                _renderMap[chunks[i].Position] = new()
+                _renderMap[chunk.Position] = new()
                 {
                     MeshId = rchunk.mesh,
                     ConnectedFaces = chunk.ConnectedFaces,
                 };
                 Profiler.EndSample();
             }
-            Profiler.EndSample();
         }
 
         private static long GetSizeOfMesh(Mesh mesh)
