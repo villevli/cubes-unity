@@ -25,6 +25,9 @@ namespace Cubes
         [SerializeField]
         private GenerateBlocks.Params _generatorOptions = GenerateBlocks.Params.Default;
         [SerializeField]
+        [Min(1)]
+        private int _chunksPerBatch = 4096;
+        [SerializeField]
         private bool _useGPUCompute = true;
         [SerializeField]
         [Range(1, GenerateBlocksGPU.MaxChunksPerDispatch)]
@@ -76,6 +79,7 @@ namespace Cubes
 
         private int3 _lastChunkPos = int.MinValue;
         private bool _isUpdatingChunks = false;
+        private CancellationTokenSource _updateBatchedCts;
 
         public int TrackedChunkCount => _chunkMap.IsCreated ? _chunkMap.Count() : 0;
         public int LoadedChunkCount => _stats.LoadedChunkCount;
@@ -117,12 +121,22 @@ namespace Cubes
         {
             var camPos = Camera.main.transform.position;
             int3 currentChunkPos = (int3)math.floor((float3)camPos / Chunk.Size);
-            if (!_lastChunkPos.Equals(currentChunkPos) && !_isUpdatingChunks)
+            if (!_lastChunkPos.Equals(currentChunkPos))
             {
-                _lastChunkPos = currentChunkPos;
-                Profiler.BeginSample("UpdateChunksInRange");
-                UpdateChunksInRange(currentChunkPos, _cts.Token);
-                Profiler.EndSample();
+                if (_updateBatchedCts != null)
+                {
+                    _updateBatchedCts.Cancel();
+                    _updateBatchedCts.Dispose();
+                    _updateBatchedCts = null;
+                }
+                if (!_isUpdatingChunks)
+                {
+                    _lastChunkPos = currentChunkPos;
+                    _updateBatchedCts = new();
+                    Profiler.BeginSample("UpdateChunksInRange");
+                    UpdateChunksInRange(currentChunkPos, _updateBatchedCts.Token, _cts.Token);
+                    Profiler.EndSample();
+                }
             }
 
             if (_cullChunks)
@@ -301,14 +315,14 @@ namespace Cubes
             _atlasMaterial.mainTexture = atlas;
         }
 
-        private async void UpdateChunksInRange(int3 currentChunkPos, CancellationToken cancellationToken)
+        private async void UpdateChunksInRange(int3 currentChunkPos, CancellationToken batchCancel, CancellationToken cancellationToken)
         {
             if (_isUpdatingChunks)
                 throw new InvalidOperationException("_isUpdatingChunks must be false");
             try
             {
                 _isUpdatingChunks = true;
-                await UpdateChunksInRangeAsync(currentChunkPos, cancellationToken);
+                await UpdateChunksInRangeAsync(currentChunkPos, batchCancel, cancellationToken);
             }
             finally
             {
@@ -316,7 +330,7 @@ namespace Cubes
             }
         }
 
-        private async Awaitable UpdateChunksInRangeAsync(int3 currentChunkPos, CancellationToken cancellationToken)
+        private async Awaitable UpdateChunksInRangeAsync(int3 currentChunkPos, CancellationToken batchCancel, CancellationToken cancellationToken)
         {
             long startTs = Stopwatch.GetTimestamp();
 
@@ -326,8 +340,6 @@ namespace Cubes
             Profiler.BeginSample("AllocateBuffers");
             var chunksToLoadBuf = new NativeArray<Chunk>(maxChunksInView, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
             int chunksToLoadCount = 0;
-            var chunksToRenderBuf = new NativeArray<Chunk>(maxChunksInView * 2, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-            int chunksToRenderCount = 0;
             Profiler.EndSample();
 
             await Awaitable.BackgroundThreadAsync();
@@ -338,14 +350,13 @@ namespace Cubes
                 Profiler.EndSample();
 
                 Profiler.BeginSample("FindChunksToLoad");
-                FindChunksToLoad(ref _chunkMap, currentChunkPos, viewDist, ref chunksToLoadBuf, ref chunksToLoadCount, ref chunksToRenderBuf, ref chunksToRenderCount);
+                FindChunksToLoad(ref _chunkMap, currentChunkPos, viewDist, ref chunksToLoadBuf, ref chunksToLoadCount);
                 Profiler.EndSample();
             }
             await Awaitable.MainThreadAsync();
             if (cancellationToken.IsCancellationRequested)
             {
                 chunksToLoadBuf.Dispose();
-                chunksToRenderBuf.Dispose();
                 return;
             }
 
@@ -353,43 +364,97 @@ namespace Cubes
             UnloadOutOfRangeChunks();
             Profiler.EndSample();
 
+            int loadedCount = 0;
+            int renderedCount = 0;
             if (chunksToLoadCount > 0)
             {
                 var chunksToLoad = chunksToLoadBuf.GetSubArray(0, chunksToLoadCount);
+                // TODO: Sort based on visibility on camera
                 // Debug.Log($"Loading {chunksToLoad.Length} chunks around {currentChunkPos}");
-
-                await GenerateChunksAsync(chunksToLoad, cancellationToken);
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    chunksToLoadBuf.Dispose();
-                    chunksToRenderBuf.Dispose();
-                    return;
-                }
-
-                Profiler.BeginSample("MarkLoadedChunks");
-                for (int i = 0; i < chunksToLoad.Length; i++)
-                {
-                    var chunk = chunksToLoad[i];
-                    chunk.IsPendingUpdate = false;
-                    _chunkMap[chunk.Position] = chunk;
-                    chunksToLoad[i] = chunk;
-                    chunksToRenderBuf[chunksToRenderCount++] = chunk;
-
-                    _stats.LoadedChunkCount += chunk.IsLoaded ? 1 : 0;
-                    _stats.BlocksInMemoryCount += chunk.Blocks.Length;
-                }
-                Profiler.EndSample();
-
-                var chunksToRender = chunksToRenderBuf.GetSubArray(0, chunksToRenderCount);
-                await CreateChunkMeshesBatchedAsync(chunksToRender, cancellationToken);
+                var (loaded, rendered) = await LoadAndRenderChunksBatchedAsync(chunksToLoad, batchCancel, cancellationToken);
+                loadedCount += loaded;
+                renderedCount += rendered;
             }
 
             chunksToLoadBuf.Dispose();
-            chunksToRenderBuf.Dispose();
 
-            LastChunksLoadedCount = chunksToLoadCount;
-            LastChunksRenderedCount = chunksToRenderCount;
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            LastChunksLoadedCount = loadedCount;
+            LastChunksRenderedCount = renderedCount;
             LastChunkUpdateDurationMs = (float)TimeSpan.FromTicks(Stopwatch.GetTimestamp() - startTs).TotalMilliseconds;
+        }
+
+        private async Awaitable<(int loaded, int rendered)> LoadAndRenderChunksBatchedAsync(NativeArray<Chunk> chunks, CancellationToken batchCancel, CancellationToken cancellationToken)
+        {
+            var chunksPerBatch = math.max(_chunksPerBatch, 1);
+            int loaded = 0;
+            int rendered = 0;
+            while (!cancellationToken.IsCancellationRequested
+                && !batchCancel.IsCancellationRequested
+                && loaded < chunks.Length)
+            {
+                var batch = chunks.GetSubArray(loaded, math.min(chunks.Length - loaded, chunksPerBatch));
+                rendered += await LoadAndRenderChunksAsync(batch, cancellationToken);
+                loaded += batch.Length;
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+                return (loaded, rendered);
+
+            // Make sure IsPendingUpdate is set to false for remaining chunks
+            Profiler.BeginSample("MarkRemainingChunks");
+            var remaining = chunks.GetSubArray(loaded, chunks.Length - loaded);
+            for (int i = 0; i < remaining.Length; i++)
+            {
+                var chunk = remaining[i];
+                chunk.IsPendingUpdate = false;
+                _chunkMap[chunk.Position] = chunk;
+                remaining[i] = chunk;
+            }
+            Profiler.EndSample();
+            return (loaded, rendered);
+        }
+
+        private async Awaitable<int> LoadAndRenderChunksAsync(NativeArray<Chunk> chunks, CancellationToken cancellationToken)
+        {
+            await GenerateChunksAsync(chunks, cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return 0;
+            }
+
+            Profiler.BeginSample("AllocateBuffers");
+            var chunksToRenderBuf = new NativeArray<Chunk>(chunks.Length * 4, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+            int chunksToRenderCount = 0;
+            Profiler.EndSample();
+
+            Profiler.BeginSample("FindNeighboringChunksToRender");
+            FindNeighboringChunksToRender(chunks, _chunkMap, ref chunksToRenderBuf, ref chunksToRenderCount);
+            Profiler.EndSample();
+
+            Profiler.BeginSample("MarkLoadedChunks");
+            for (int i = 0; i < chunks.Length; i++)
+            {
+                var chunk = chunks[i];
+                chunk.IsPendingUpdate = false;
+                _chunkMap[chunk.Position] = chunk;
+                chunks[i] = chunk;
+                chunksToRenderBuf[chunksToRenderCount++] = chunk;
+
+                _stats.LoadedChunkCount += chunk.IsLoaded ? 1 : 0;
+                _stats.BlocksInMemoryCount += chunk.Blocks.Length;
+            }
+            Profiler.EndSample();
+
+            var chunksToRender = chunksToRenderBuf.GetSubArray(0, chunksToRenderCount);
+            await CreateChunkMeshesBatchedAsync(chunksToRender, cancellationToken);
+
+            chunksToRenderBuf.Dispose();
+            return chunksToRenderCount;
         }
 
         [BurstCompile]
@@ -404,20 +469,9 @@ namespace Cubes
         [BurstCompile]
         private static void FindChunksToLoad(
             ref NativeParallelHashMap<int3, Chunk> chunkMap, in int3 currentChunkPos, in int3 viewDist,
-            ref NativeArray<Chunk> chunksToLoad, ref int chunksToLoadCount,
-            ref NativeArray<Chunk> chunksToRender, ref int chunksToRenderCount
+            ref NativeArray<Chunk> chunksToLoad, ref int chunksToLoadCount
         )
         {
-            var _chunkMap = chunkMap;
-            var _chunksToRender = chunksToRender;
-            int renderCount = 0;
-
-            void CheckNeighbor(int3 p)
-            {
-                if (_chunkMap.TryGetValue(p, out var nChunk) && nChunk.IsLoaded && !nChunk.IsPendingUpdate)
-                    _chunksToRender[renderCount++] = nChunk;
-            }
-
             for (int y = -viewDist.y; y < viewDist.y; y++)
             {
                 for (int z = -viewDist.z; z < viewDist.z; z++)
@@ -435,19 +489,42 @@ namespace Cubes
                         {
                             chunk.IsPendingUpdate = true;
                             chunksToLoad[chunksToLoadCount++] = chunk;
-
-                            // Update the mesh of neighboring chunks if they have been loaded already
-                            CheckNeighbor(p + new int3(-1, 0, 0));
-                            CheckNeighbor(p + new int3(1, 0, 0));
-                            CheckNeighbor(p + new int3(0, -1, 0));
-                            CheckNeighbor(p + new int3(0, 1, 0));
-                            CheckNeighbor(p + new int3(0, 0, -1));
-                            CheckNeighbor(p + new int3(0, 0, 1));
                         }
 
                         chunkMap[p] = chunk;
                     }
                 }
+            }
+        }
+
+        [BurstCompile]
+        private static void FindNeighboringChunksToRender(
+            in NativeArray<Chunk> chunks,
+            in NativeParallelHashMap<int3, Chunk> chunkMap,
+            ref NativeArray<Chunk> chunksToRender, ref int chunksToRenderCount
+        )
+        {
+            var _chunkMap = chunkMap;
+            var _chunksToRender = chunksToRender;
+            int renderCount = 0;
+
+            void CheckNeighbor(int3 p)
+            {
+                if (_chunkMap.TryGetValue(p, out var nChunk) && nChunk.IsLoaded && !nChunk.IsPendingUpdate)
+                    _chunksToRender[renderCount++] = nChunk;
+            }
+
+            foreach (ref var chunk in chunks.AsSpan())
+            {
+                var p = chunk.Position;
+
+                // Update the mesh of neighboring chunks if they have been loaded already
+                CheckNeighbor(p + new int3(-1, 0, 0));
+                CheckNeighbor(p + new int3(1, 0, 0));
+                CheckNeighbor(p + new int3(0, -1, 0));
+                CheckNeighbor(p + new int3(0, 1, 0));
+                CheckNeighbor(p + new int3(0, 0, -1));
+                CheckNeighbor(p + new int3(0, 0, 1));
             }
 
             chunksToRenderCount = renderCount;
@@ -551,7 +628,7 @@ namespace Cubes
                 var runAsync = GenerateBlocksGPU.RunAsync(toGenerate, buffers, p, _procGenShader, cancellationToken);
                 Profiler.EndSample();
                 await runAsync;
-                if (_cullChunks)
+                if (_cullChunks && !cancellationToken.IsCancellationRequested)
                     connectedFacesTasks.Add(CalculateConnectedFacesAsync(toGenerate));
                 generated += toGenerate.Length;
             }
