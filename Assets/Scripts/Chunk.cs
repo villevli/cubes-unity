@@ -21,6 +21,7 @@ namespace Cubes
         /// Each chunk contains Size^3 blocks.
         /// </summary>
         public const int Size = 16;
+        public const int BlockCount = Size * Size * Size;
 
         // To support many block types and states, use a palette of block states like described in https://minecraft.wiki/w/Chunk_format
 

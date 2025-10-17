@@ -17,7 +17,7 @@ namespace Cubes
     /// Uses background threads to keep the framerate smooth.
     /// </summary>
     [BurstCompile]
-    public class ChunkLoader : MonoBehaviour
+    public partial class ChunkLoader : MonoBehaviour
     {
         [SerializeField]
         private int _viewDistance = 8;
@@ -80,6 +80,7 @@ namespace Cubes
         private int3 _lastChunkPos = int.MinValue;
         private bool _isUpdatingChunks = false;
         private CancellationTokenSource _updateBatchedCts;
+        private AwaitableCompletionSource _chunkUpdateAcs;
 
         public int TrackedChunkCount => _chunkMap.IsCreated ? _chunkMap.Count() : 0;
         public int LoadedChunkCount => _stats.LoadedChunkCount;
@@ -321,12 +322,15 @@ namespace Cubes
                 throw new InvalidOperationException("_isUpdatingChunks must be false");
             try
             {
+                _chunkUpdateAcs = new();
                 _isUpdatingChunks = true;
                 await UpdateChunksInRangeAsync(currentChunkPos, batchCancel, cancellationToken);
             }
             finally
             {
                 _isUpdatingChunks = false;
+                _chunkUpdateAcs.SetResult();
+                _chunkUpdateAcs = null;
             }
         }
 
