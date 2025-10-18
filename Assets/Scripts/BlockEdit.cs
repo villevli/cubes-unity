@@ -11,6 +11,8 @@ namespace Cubes
     {
         [SerializeField]
         private ChunkLoader _chunkLoader;
+        [SerializeField]
+        private int _size = 1;
 
         private InputAction _breakBlockAction;
         private InputAction _placeBlockAction;
@@ -40,7 +42,7 @@ namespace Cubes
 
         private async void SetBlock(int3 position, int blockType)
         {
-            await _chunkLoader.SetBlockAsync(position, blockType);
+            await _chunkLoader.SetBlockAsync(position, _size, blockType);
         }
     }
 }
