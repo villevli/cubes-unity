@@ -149,7 +149,9 @@ namespace Cubes
         public void Dispose()
         {
             Blocks.Dispose();
+            Blocks = default;
             Palette.Dispose();
+            Palette = default;
         }
 
         public override readonly string ToString()

@@ -20,9 +20,10 @@ namespace Cubes
         public async Awaitable SetBlockAsync(int3 position, int3 size, int blockType)
         {
             var cancellationToken = _cts.Token;
-            if (_chunkUpdateAcs != null)
+            if (IsUpdatingChunks)
             {
-                await _chunkUpdateAcs.Awaitable;
+                // TODO: If multiple SetBlockAsync calls arrive while waiting here then we could batch them together. At least the mesh rebuild part
+                await WaitChunkUpdatesAsync();
                 if (cancellationToken.IsCancellationRequested)
                     return;
             }
@@ -37,13 +38,12 @@ namespace Cubes
             Debug.Log($"Set blocks at {position} size {size} to {blockType}. Rebuilding mesh of {renderChunks.Length} chunks");
             try
             {
-                // FIXME: Breaks if SetBlockAsync is called again
-                _isUpdatingChunks = true;
+                StartUpdatingChunks();
                 await CreateChunkMeshesBatchedAsync(renderChunks, cancellationToken);
             }
             finally
             {
-                _isUpdatingChunks = false;
+                EndUpdatingChunks();
                 renderChunksBuf.Dispose();
             }
         }
@@ -128,6 +128,7 @@ namespace Cubes
                 chunk.Palette = new(1, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
                 chunk.Palette[0] = blockType;
                 chunk.Blocks.Dispose();
+                chunk.Blocks = default;
                 return true;
             }
 

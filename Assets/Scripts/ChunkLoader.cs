@@ -130,7 +130,7 @@ namespace Cubes
                     _updateBatchedCts.Dispose();
                     _updateBatchedCts = null;
                 }
-                if (!_isUpdatingChunks)
+                if (!IsUpdatingChunks)
                 {
                     _lastChunkPos = currentChunkPos;
                     _updateBatchedCts = new();
@@ -316,21 +316,37 @@ namespace Cubes
             _atlasMaterial.mainTexture = atlas;
         }
 
+        private bool IsUpdatingChunks => _isUpdatingChunks;
+
+        private Awaitable WaitChunkUpdatesAsync() => _chunkUpdateAcs.Awaitable;
+
+        private void StartUpdatingChunks()
+        {
+            _chunkUpdateAcs = new();
+            _isUpdatingChunks = true;
+        }
+
+        private void EndUpdatingChunks()
+        {
+            _isUpdatingChunks = false;
+            // SetResult can execute continuations that also set _chunkUpdateAcs so we set it before
+            var acs = _chunkUpdateAcs;
+            _chunkUpdateAcs = null;
+            acs.SetResult();
+        }
+
         private async void UpdateChunksInRange(int3 currentChunkPos, CancellationToken batchCancel, CancellationToken cancellationToken)
         {
-            if (_isUpdatingChunks)
-                throw new InvalidOperationException("_isUpdatingChunks must be false");
+            if (IsUpdatingChunks)
+                throw new InvalidOperationException($"{nameof(IsUpdatingChunks)} must be false");
             try
             {
-                _chunkUpdateAcs = new();
-                _isUpdatingChunks = true;
+                StartUpdatingChunks();
                 await UpdateChunksInRangeAsync(currentChunkPos, batchCancel, cancellationToken);
             }
             finally
             {
-                _isUpdatingChunks = false;
-                _chunkUpdateAcs.SetResult();
-                _chunkUpdateAcs = null;
+                EndUpdatingChunks();
             }
         }
 
