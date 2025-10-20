@@ -57,17 +57,17 @@ namespace Cubes
                 }
 
                 ReadOnlySpan<byte> blocks = chunk.Blocks;
+                ReadOnlySpan<int> palette = chunk.Palette;
                 short connectedFaces = 0;
                 // memclear
                 for (int i = 0; i < filled.Length; i++)
                     filled[i] = 0;
 
-                void FloodFill(ReadOnlySpan<byte> blocks, int3 p)
+                void FloodFill(in ReadOnlySpan<byte> blocks, in ReadOnlySpan<int> palette, int3 p)
                 {
-                    bool IsOpaque(byte block)
+                    bool IsOpaque(byte block, in ReadOnlySpan<int> palette)
                     {
-                        // TODO: check properly based on the palette of this chunk
-                        return block != 0;
+                        return palette[block] != 0;
                     }
 
                     bool IsFilled(byte b)
@@ -78,7 +78,7 @@ namespace Cubes
                     if (IsFilled(Chunk.GetBlock(filled, p)))
                         return;
 
-                    if (IsOpaque(Chunk.GetBlock(blocks, p)))
+                    if (IsOpaque(Chunk.GetBlock(blocks, p), palette))
                         return;
 
                     short faceSet = 0;
@@ -104,7 +104,7 @@ namespace Cubes
                                 faceSet |= 1 << 4;
                             else if (np.x >= size)
                                 faceSet |= 1 << 5;
-                            else if (!IsFilled(Chunk.GetBlock(filled, np)) && !IsOpaque(Chunk.GetBlock(blocks, np)))
+                            else if (!IsFilled(Chunk.GetBlock(filled, np)) && !IsOpaque(Chunk.GetBlock(blocks, np), palette))
                             {
                                 // Fill
                                 Chunk.GetBlock(filled, np) = 1;
@@ -121,27 +121,27 @@ namespace Cubes
                 // down -y
                 for (int z = 0; z < size; z++)
                     for (int x = 0; x < size; x++)
-                        FloodFill(blocks, new(x, 0, z));
+                        FloodFill(blocks, palette, new(x, 0, z));
                 // up +y
                 for (int z = 0; z < size; z++)
                     for (int x = 0; x < size; x++)
-                        FloodFill(blocks, new(x, size - 1, z));
+                        FloodFill(blocks, palette, new(x, size - 1, z));
                 // south -z
                 for (int y = 0; y < size; y++)
                     for (int x = 0; x < size; x++)
-                        FloodFill(blocks, new(x, y, 0));
+                        FloodFill(blocks, palette, new(x, y, 0));
                 // north +z
                 for (int y = 0; y < size; y++)
                     for (int x = 0; x < size; x++)
-                        FloodFill(blocks, new(x, y, size - 1));
+                        FloodFill(blocks, palette, new(x, y, size - 1));
                 // west -x
                 for (int y = 0; y < size; y++)
                     for (int z = 0; z < size; z++)
-                        FloodFill(blocks, new(0, y, z));
+                        FloodFill(blocks, palette, new(0, y, z));
                 // east +x
                 for (int y = 0; y < size; y++)
                     for (int z = 0; z < size; z++)
-                        FloodFill(blocks, new(size - 1, y, z));
+                        FloodFill(blocks, palette, new(size - 1, y, z));
 
                 chunk.ConnectedFaces = connectedFaces;
             }
