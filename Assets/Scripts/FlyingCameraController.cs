@@ -17,7 +17,6 @@ namespace Cubes
         [SerializeField]
         private bool _moveRelative = true;
 
-        private bool _inputActive;
         private Vector2 _lookAngles;
 
         private InputAction _lookAction;
@@ -37,32 +36,10 @@ namespace Cubes
             var rot = transform.eulerAngles;
             _lookAngles.x = rot.y;
             _lookAngles.y = rot.x;
-
-            _inputActive = Touchscreen.current != null;
         }
 
         private void Update()
         {
-            Rect displayRect = new(0, 0, Screen.width, Screen.height);
-
-            // Activate input and lock cursor when using mouse + keyboard
-            if (Keyboard.current?.escapeKey.wasPressedThisFrame ?? false)
-            {
-                _inputActive = !_inputActive;
-            }
-            if ((Mouse.current?.press.wasReleasedThisFrame ?? false) && displayRect.Contains(Mouse.current.position.ReadValue()))
-            {
-                _inputActive = true;
-            }
-
-            if (Touchscreen.current == null)
-            {
-                Cursor.lockState = _inputActive ? CursorLockMode.Locked : CursorLockMode.None;
-            }
-
-            if (!_inputActive)
-                return;
-
             // Look
             var lookInput = _lookAction.ReadValue<Vector2>();
             _lookAngles += lookInput * _lookSensitivity;
