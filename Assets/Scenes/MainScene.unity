@@ -378,6 +378,9 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Cubes.BlockEdit
   _chunkLoader: {fileID: 683345183}
   _size: 1
+  _maxDistance: 64
+  _startRepeatTime: 0.5
+  _repeatInterval: 0.05
 --- !u!114 &330585550
 MonoBehaviour:
   m_ObjectHideFlags: 0

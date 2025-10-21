@@ -15,7 +15,7 @@ namespace Cubes
         public static int3 GetChunkLocalPos(int3 blockPos, int3 chunkPos) => blockPos - chunkPos * Chunk.Size;
 
         /// <summary>
-        /// Set a block(s) inside the box defined by <paramref name="position"/> and <paramref name="size"/> to <paramref name="blockType"/> and update the mesh.
+        /// Set the block(s) inside the box defined by <paramref name="position"/> and <paramref name="size"/> to <paramref name="blockType"/> and update the mesh.
         /// </summary>
         public async Awaitable SetBlockAsync(int3 position, int3 size, int blockType)
         {
@@ -35,7 +35,7 @@ namespace Cubes
             NativeArray<Chunk> renderChunksBuf = default;
             var renderChunksCount = GetChunksSeenByBlock(position, size, Allocator.Persistent, ref renderChunksBuf, _chunkMap);
             var renderChunks = renderChunksBuf.GetSubArray(0, renderChunksCount);
-            Debug.Log($"Set blocks at {position} size {size} to {blockType}. Rebuilding mesh of {renderChunks.Length} chunks");
+            // Debug.Log($"Set blocks at {position} size {size} to {blockType}. Rebuilding mesh of {renderChunks.Length} chunks");
             try
             {
                 StartUpdatingChunks();
