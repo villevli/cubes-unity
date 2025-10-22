@@ -36,6 +36,11 @@ namespace Cubes
             var renderChunksCount = GetChunksSeenByBlock(position, size, Allocator.Persistent, ref renderChunksBuf, _chunkMap);
             var renderChunks = renderChunksBuf.GetSubArray(0, renderChunksCount);
             // Debug.Log($"Set blocks at {position} size {size} to {blockType}. Rebuilding mesh of {renderChunks.Length} chunks");
+            // foreach (var chunk in renderChunks)
+            // {
+            //     DebugGizmos.DrawWireCube(((float3)chunk.Position + 0.5f) * Chunk.Size, Chunk.Size, Color.red, 10);
+            // }
+
             try
             {
                 StartUpdatingChunks();
@@ -212,8 +217,8 @@ namespace Cubes
                         {
                             chunks[chunksAdded++] = nChunk;
                         }
-                        else if (chunkPos.x == maxChunk.x - 1 && maxBlockLocal.x == Chunk.Size
-                              && chunkMap.TryGetValue(chunkPos + new int3(1, 0, 0), out nChunk) && nChunk.IsLoaded)
+                        if (chunkPos.x == maxChunk.x - 1 && maxBlockLocal.x == Chunk.Size
+                         && chunkMap.TryGetValue(chunkPos + new int3(1, 0, 0), out nChunk) && nChunk.IsLoaded)
                         {
                             chunks[chunksAdded++] = nChunk;
                         }
@@ -223,8 +228,8 @@ namespace Cubes
                         {
                             chunks[chunksAdded++] = nChunk;
                         }
-                        else if (chunkPos.y == maxChunk.y - 1 && maxBlockLocal.y == Chunk.Size
-                              && chunkMap.TryGetValue(chunkPos + new int3(0, 1, 0), out nChunk) && nChunk.IsLoaded)
+                        if (chunkPos.y == maxChunk.y - 1 && maxBlockLocal.y == Chunk.Size
+                         && chunkMap.TryGetValue(chunkPos + new int3(0, 1, 0), out nChunk) && nChunk.IsLoaded)
                         {
                             chunks[chunksAdded++] = nChunk;
                         }
@@ -234,8 +239,8 @@ namespace Cubes
                         {
                             chunks[chunksAdded++] = nChunk;
                         }
-                        else if (chunkPos.z == maxChunk.z - 1 && maxBlockLocal.z == Chunk.Size
-                              && chunkMap.TryGetValue(chunkPos + new int3(0, 0, 1), out nChunk) && nChunk.IsLoaded)
+                        if (chunkPos.z == maxChunk.z - 1 && maxBlockLocal.z == Chunk.Size
+                         && chunkMap.TryGetValue(chunkPos + new int3(0, 0, 1), out nChunk) && nChunk.IsLoaded)
                         {
                             chunks[chunksAdded++] = nChunk;
                         }
