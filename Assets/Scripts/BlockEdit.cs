@@ -127,7 +127,7 @@ namespace Cubes
 
         private static void DrawMesh(Mesh mesh, Matrix4x4 matrix, Material material)
         {
-            Graphics.DrawMesh(mesh, matrix, material, 0, null, 0, null, ShadowCastingMode.Off, false, null, LightProbeUsage.Off);
+            Graphics.RenderMesh(new(material), mesh, 0, matrix);
         }
 
         private static Mesh CreateLineCube()
