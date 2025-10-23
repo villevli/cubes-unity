@@ -21,6 +21,9 @@ namespace Cubes
         [SerializeField]
         private float _repeatInterval = 0.05f;
 
+        private InputAction _pickBlockAction;
+        private int _blockType = BlockType.Stone;
+
         private InputAction _breakBlockAction;
         private float _breakPressedTimer;
         private float _breakRepeatTimer;
@@ -53,6 +56,7 @@ namespace Cubes
 
         private void Start()
         {
+            _pickBlockAction = InputSystem.actions.FindAction("Pick");
             _breakBlockAction = InputSystem.actions.FindAction("Attack");
             _placeBlockAction = InputSystem.actions.FindAction("Block");
         }
@@ -68,6 +72,11 @@ namespace Cubes
                 Debug.DrawRay(hit.Pos, (float3)hit.Normal, Color.red);
 
                 HighlightBlock(math.floor(hit.Pos), (float3)_size);
+            }
+
+            if (_pickBlockAction.WasPressedThisFrame())
+            {
+                TryPickBlock(ray);
             }
 
             if (_breakBlockAction.WasPressedThisFrame())
@@ -97,11 +106,19 @@ namespace Cubes
             }
         }
 
+        private void TryPickBlock(Ray ray)
+        {
+            if (_chunkLoader.Raycast(ray, out var hit, _maxDistance))
+            {
+                _blockType = hit.BlockType;
+            }
+        }
+
         private void TryPlaceBlock(Ray ray)
         {
             if (_chunkLoader.Raycast(ray, out var hit, _maxDistance))
             {
-                SetBlock((int3)math.floor(hit.Pos) + hit.Normal, BlockType.Stone);
+                SetBlock((int3)math.floor(hit.Pos) + hit.Normal, _blockType);
             }
         }
 
