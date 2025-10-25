@@ -10,6 +10,8 @@ namespace Cubes
     {
         [SerializeField]
         private ChunkLoader _chunkLoader;
+        [SerializeField]
+        private BlockEdit _blockEdit;
 
         [SerializeField]
         private bool _show = true;
@@ -68,6 +70,8 @@ namespace Cubes
             var camPos = Camera.main.transform.position;
             var blockPos = (int3)math.floor(camPos);
             var chunkPos = (int3)math.floor(camPos / Chunk.Size);
+            var lookingAt = _blockEdit.LastRayHit;
+            var lookingAtBlock = (int3)math.floor(lookingAt.Pos);
 
             static void Label(string text)
             {
@@ -87,9 +91,6 @@ namespace Cubes
             GUI.backgroundColor = new Color(0, 0, 0, 0.2f);
             Label(_fps);
 
-            Label(Invariant($"Block: {blockPos.x} {blockPos.y} {blockPos.z}"));
-            Label(Invariant($"Chunk: {chunkPos.x} {chunkPos.y} {chunkPos.z}"));
-            GUILayout.Space(10);
             Label(Invariant($"Chunks: {_chunkLoader.LoadedChunkCount}/{_chunkLoader.TrackedChunkCount}"));
             Label(Invariant($"Blocks: {_chunkLoader.BlocksInMemoryCount} ({BytesToMB(_chunkLoader.BlocksInMemoryCount)})"));
             Label(Invariant($"Meshes: {_chunkLoader.MeshCount} ({BytesToMB(_chunkLoader.MeshMemoryUsedBytes)})"));
@@ -99,6 +100,16 @@ namespace Cubes
             Label(_renderThread);
             Label(Invariant($"Tris: {_renderTrianglesRecorder.LastValue / 1000f:F1}k"));
             Label(Invariant($"System Memory: {BytesToMB(_systemMemoryRecorder.LastValue)}"));
+
+            GUILayout.Space(10);
+            Label(Invariant($"XYZ: {Fmt(camPos)}"));
+            Label(Invariant($"Block: {Fmt(blockPos)}"));
+            Label(Invariant($"Chunk: {Fmt(chunkPos)}"));
+            if (!lookingAt.Miss)
+            {
+                Label(Invariant($"Looking at: {Fmt(lookingAtBlock)}"));
+                Label(Invariant($"Block: {lookingAt.BlockType}"));
+            }
 
             GUILayout.FlexibleSpace();
 
@@ -123,6 +134,9 @@ namespace Cubes
                 _chunkLoader.Unload();
             }
         }
+
+        static FormattableString Fmt(float3 a) => $"{a.x:F3} {a.y:F3} {a.z:F3}";
+        static FormattableString Fmt(int3 a) => $"{a.x} {a.y} {a.z}";
 
         private static FormattableString BytesToMB(long bytes)
         {

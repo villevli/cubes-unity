@@ -36,6 +36,8 @@ namespace Cubes
         private Material _blockHighlightMaterial;
         private Material _blockHighlightMaterial2;
 
+        public RayHit LastRayHit;
+
         private void Awake()
         {
             _blockHighlightMesh = CreateLineCube();
@@ -73,6 +75,7 @@ namespace Cubes
 
                 HighlightBlock(math.floor(hit.Pos), (float3)_size);
             }
+            LastRayHit = hit;
 
             if (_pickBlockAction.WasPressedThisFrame())
             {

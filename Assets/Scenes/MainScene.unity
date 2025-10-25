@@ -1272,6 +1272,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _chunkLoader: {fileID: 683345183}
+  _blockEdit: {fileID: 330585549}
   _show: 1
 --- !u!4 &1565541101
 Transform:
