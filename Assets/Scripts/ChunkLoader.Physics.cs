@@ -15,6 +15,8 @@ namespace Cubes
         public int3 Normal;
         // Debug
         public int Steps;
+
+        public readonly bool Miss => !Cubes.BlockType.IsSolid(BlockType);
     }
 
     public partial class ChunkLoader
@@ -38,8 +40,6 @@ namespace Cubes
         public static bool Raycast(in float3 origin, in float3 dir, out RayHit hit, float maxDistance,
             in NativeParallelHashMap<int3, Chunk> chunkMap)
         {
-            bool IsSolid(int block) => block != BlockType.Air;
-
             float3 invDir = 1f / dir;
             float3 pos = origin;
             float distance = 0f;
@@ -76,7 +76,7 @@ namespace Cubes
                     material = chunk.Palette[block];
                 }
 
-                if (IsSolid(material))
+                if (BlockType.IsSolid(material))
                     break;
 
                 // https://dubiousconst282.github.io/2024/10/03/voxel-ray-tracing/
@@ -103,7 +103,7 @@ namespace Cubes
 
             hit.Steps = i;
 
-            return IsSolid(material);
+            return !hit.Miss;
         }
     }
 }

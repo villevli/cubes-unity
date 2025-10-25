@@ -164,20 +164,16 @@ namespace Cubes
             sbyte4 west = new(-128, 0, 0);
             sbyte4 east = new(127, 0, 0);
 
-            static bool IsBlockOpaque(in int block)
-            {
-                return block != BlockType.Air;
-            }
             static bool IsOpaque(in ReadOnlySpan<byte> blocks, in ReadOnlySpan<int> palette, int x, int y, int z)
             {
-                return IsBlockOpaque(GetBlockType(blocks, palette, x, y, z));
+                return BlockType.IsOpaque(GetBlockType(blocks, palette, x, y, z));
             }
             static bool IsNeighborOpaque(in Chunk chunk, int x, int y, int z, in Params p)
             {
                 if (!chunk.IsLoaded)
                     return !p.AddBorderWalls;
                 if (chunk.Palette.Length == 1)
-                    return IsBlockOpaque(chunk.Palette[0]);
+                    return BlockType.IsOpaque(chunk.Palette[0]);
                 return IsOpaque(chunk.Blocks, chunk.Palette, x, y, z);
             }
 

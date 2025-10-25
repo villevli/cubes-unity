@@ -49,10 +49,10 @@ namespace Cubes
             {
                 if (chunk.Palette.Length == 1)
                 {
-                    if (chunk.Palette[0] == BlockType.Air)
-                        chunk.ConnectedFaces = ~0;
-                    else
+                    if (BlockType.IsOpaque(chunk.Palette[0]))
                         chunk.ConnectedFaces = 0;
+                    else
+                        chunk.ConnectedFaces = ~0;
                     continue;
                 }
 
@@ -67,7 +67,7 @@ namespace Cubes
                 {
                     bool IsOpaque(byte block, in ReadOnlySpan<int> palette)
                     {
-                        return palette[block] != 0;
+                        return BlockType.IsOpaque(palette[block]);
                     }
 
                     bool IsFilled(byte b)

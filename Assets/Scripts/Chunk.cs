@@ -2,19 +2,9 @@ using System;
 using System.Runtime.InteropServices;
 using Unity.Collections;
 using Unity.Mathematics;
-using UnityEngine;
 
 namespace Cubes
 {
-    [Serializable]
-    public struct BlockType
-    {
-        public Rect TexAtlasRect;
-
-        public const int Air = 0;
-        public const int Stone = 1;
-    }
-
     public struct Chunk : IDisposable
     {
         /// <summary>
