@@ -73,11 +73,6 @@ namespace Cubes
             var lookingAt = _blockEdit.LastRayHit;
             var lookingAtBlock = (int3)math.floor(lookingAt.Pos);
 
-            static void Label(string text)
-            {
-                GUILayout.Label(text, Styles.Label, GUILayout.ExpandWidth(false));
-            }
-
             var scale = Screen.height / 800f;
 
             var safeArea = Screen.safeArea;
@@ -89,33 +84,33 @@ namespace Cubes
             GUI.matrix = Matrix4x4.Scale(Vector3.one * scale);
 
             GUI.backgroundColor = new Color(0, 0, 0, 0.2f);
-            Label(_fps);
+            LabelStr(_fps);
 
-            Label(Invariant($"Chunks: {_chunkLoader.LoadedChunkCount}/{_chunkLoader.TrackedChunkCount}"));
-            Label(Invariant($"Blocks: {_chunkLoader.BlocksInMemoryCount} ({BytesToMB(_chunkLoader.BlocksInMemoryCount)})"));
-            Label(Invariant($"Meshes: {_chunkLoader.MeshCount} ({BytesToMB(_chunkLoader.MeshMemoryUsedBytes)})"));
-            Label(Invariant($"Visible: {_chunkLoader.VisibleChunks}"));
+            Label($"Chunks: {_chunkLoader.LoadedChunkCount}/{_chunkLoader.TrackedChunkCount}");
+            Label($"Blocks: {_chunkLoader.BlocksInMemoryCount} ({FmtBytes(_chunkLoader.BlocksInMemoryCount)})");
+            Label($"Meshes: {_chunkLoader.MeshCount} ({FmtBytes(_chunkLoader.MeshMemoryUsedBytes)})");
+            Label($"Visible: {_chunkLoader.VisibleChunks}");
             GUILayout.Space(10);
-            Label(_mainThread);
-            Label(_renderThread);
-            Label(Invariant($"Tris: {_renderTrianglesRecorder.LastValue / 1000f:F1}k"));
-            Label(Invariant($"System Memory: {BytesToMB(_systemMemoryRecorder.LastValue)}"));
+            LabelStr(_mainThread);
+            LabelStr(_renderThread);
+            Label($"Tris: {_renderTrianglesRecorder.LastValue / 1000f:F1}k");
+            Label($"System Memory: {FmtBytes(_systemMemoryRecorder.LastValue)}");
 
             GUILayout.Space(10);
-            Label(Invariant($"XYZ: {Fmt(camPos)}"));
-            Label(Invariant($"Block: {Fmt(blockPos)}"));
-            Label(Invariant($"Chunk: {Fmt(chunkPos)}"));
+            Label($"XYZ: {Fmt(camPos)}");
+            Label($"Block: {Fmt(blockPos)}");
+            Label($"Chunk: {Fmt(chunkPos)}");
             if (!lookingAt.Miss)
             {
-                Label(Invariant($"Looking at: {Fmt(lookingAtBlock)}"));
-                Label(Invariant($"Block: {lookingAt.BlockType}"));
+                Label($"Looking at: {Fmt(lookingAtBlock)}");
+                Label($"Block: {lookingAt.BlockType}");
             }
 
             GUILayout.FlexibleSpace();
 
-            Label(Invariant($"Last Loaded: {_chunkLoader.LastChunksLoadedCount}"));
-            Label(Invariant($"Last Rendered: {_chunkLoader.LastChunksRenderedCount}"));
-            Label(Invariant($"Last Update: {_chunkLoader.LastChunkUpdateDurationMs:F2} ms"));
+            Label($"Last Loaded: {_chunkLoader.LastChunksLoadedCount}");
+            Label($"Last Rendered: {_chunkLoader.LastChunksRenderedCount}");
+            Label($"Last Update: {_chunkLoader.LastChunkUpdateDurationMs:F2} ms");
             GUILayout.Space(10);
 
             GUI.backgroundColor = Color.white;
@@ -135,13 +130,15 @@ namespace Cubes
             }
         }
 
+        static void Label(FormattableString text) => LabelStr(Invariant(text));
+        static void LabelStr(string text)
+        {
+            GUILayout.Label(text, Styles.Label, GUILayout.ExpandWidth(false));
+        }
+
         static FormattableString Fmt(float3 a) => $"{a.x:F3} {a.y:F3} {a.z:F3}";
         static FormattableString Fmt(int3 a) => $"{a.x} {a.y} {a.z}";
-
-        private static FormattableString BytesToMB(long bytes)
-        {
-            return $"{bytes / (1000 * 1000)} MB";
-        }
+        static FormattableString FmtBytes(long bytes) =>  $"{bytes / (1000 * 1000)} MB";
 
         private static class Styles
         {
