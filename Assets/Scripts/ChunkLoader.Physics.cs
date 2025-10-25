@@ -5,6 +5,8 @@ using UnityEngine;
 
 namespace Cubes
 {
+    using static Math;
+
     public struct RayHit
     {
         public int BlockType;
@@ -83,8 +85,13 @@ namespace Cubes
                 float3 sidePos = cellMin + math.step(0.0f, dir) * cellSize;
                 sideDist = (sidePos - origin) * invDir;
 
-                distance = math.min(math.min(sideDist.x, sideDist.y), sideDist.z) + 0.0001f;
-                pos = origin + distance * dir;
+                distance = math.min(math.min(sideDist.x, sideDist.y), sideDist.z);
+
+                // Make sure intersection pos is inside the correct block
+                float3 neighborMin = math.select(cellMin, cellMin + copysign(cellSize, dir), distance == sideDist);
+                float3 neighborMax = decrfloat(neighborMin + cellSize);
+
+                pos = math.clamp(origin + dir * distance, neighborMin, neighborMax);
             }
 
             hit.BlockType = material;
