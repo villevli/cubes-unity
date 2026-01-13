@@ -10,9 +10,10 @@ Cube based procedural world in Unity. Inspired by Minecraft.
 - Using the burst compiler for all heavy calculations to make it many times faster
 - Using background threads to make traversal in the world smooth even when loading or generating chunks
 - Procedural generation with perlin noises is done in a GPU compute shader. 4096 chunks (16.7 million blocks) generates in under 20 milliseconds on RTX 3070
+- Raycasting to find block surfaces
+- Break and place blocks
 
 ## Planned features
-- Break and place blocks
 - Save and load worlds
 - Collision detection
 - Light levels
